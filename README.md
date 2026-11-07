@@ -4,7 +4,7 @@
 turn-by-turn navigation on the instrument-cluster Head-Up Display (HUD)** — the way the
 community Android-Auto HUD mods bring Android Auto guidance to the same display.
 
-By **KID MIXER-MODER**. The HUD guidance sender + CMU D-Bus proxies are adapted from
+By **KID MIXER-MODER**. The HUD guidance sender is adapted from
 [Trevelopment/headunit](https://github.com/Trevelopment/headunit) (AGPL-3.0, which is why this
 is too); everything else — the iAP2 decode, the OEM transport (reverse-engineered with Ghidra),
 the build files — is original to this project.
@@ -24,7 +24,6 @@ arrow, distance, road name — to the OEM navigation HUD D-Bus API.
 mazda/
   Makefile                       cross-compile rules (m3-toolchain)
   m3-toolchain/                  ARM cross-compiler (git submodule)
-  dbus/                          vendored CMU D-Bus proxy headers (from headunit)
   patches/blmjcicarplay/
     main.cpp                     LD_PRELOAD entry + jciCARPLAY process gate + crash handler
     devmgr_shim.cpp              devmgr PLT shims + passive msgrcv iAP2 tap
@@ -63,8 +62,7 @@ The cross-compiler is the [`m3-toolchain`](https://github.com/lmagder/m3-toolcha
 submodule — an independent, third-party ARM cross-compiler (triple
 `arm-cortexa9_neon-linux-gnueabi`). Build flags match the device's runtime: `-march=armv7-a -mtune=cortex-a9 -mfpu=neon`
 and `-D_GLIBCXX_USE_CXX11_ABI=0` (the CMU ships the GCC-4.6-era libstdc++ COW std::string
-ABI). The shim links no `dbus-c++` (it talks to the HUD via the OEM `libjcidbus` transport);
-`-Wl,--as-needed` drops the unused dependency.
+ABI). The shim links no `dbus-c++`: it talks to the HUD through the OEM `libjcidbus` transport.
 
 ## License & attribution
 Licensed under the **GNU Affero General Public License v3.0** — see [`LICENSE`](LICENSE)
@@ -74,8 +72,7 @@ and [`NOTICE.md`](NOTICE.md). AGPL-3.0 is inherited from the upstream projects (
   `libjcidbus`/VBS_NAVI transport (reverse-engineered from the OEM libraries with Ghidra), the
   **`Makefile`**, the install scripts and docs — © 2026 **KID MIXER-MODER**, except the derived
   code below.
-- **Derived code (AGPL-3.0)** — the HUD guidance sender (`hud/hud_send.*`) is adapted from, and
-  the CMU D-Bus proxies (`dbus/`) are vendored from,
+- **Derived code (AGPL-3.0)** — the HUD guidance sender (`hud/hud_send.*`) is adapted from
   [Trevelopment/headunit](https://github.com/Trevelopment/headunit). This is the only reused
   code, and the reason the whole work is AGPL-3.0.
 - **`m3-toolchain`** — the ARM cross-compiler is an independent third-party submodule

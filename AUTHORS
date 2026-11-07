@@ -8,8 +8,7 @@ Derived code (AGPL-3.0 — the reason this work is AGPL-3.0):
 
     Trevelopment / Bryan Adams et al. — headunit
         https://github.com/Trevelopment/headunit
-        HUD guidance sender (hud/hud_send.*), vendored CMU D-Bus proxies (dbus/),
-        and the cross-compile build pattern.
+        HUD guidance sender (hud/hud_send.*) and the cross-compile build pattern.
 
 Build dependency (independent third-party, not authored here, its own license):
 

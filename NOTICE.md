@@ -17,8 +17,8 @@ headunit-derived files listed under "Derived code" below. This includes:
 ## Derived code (AGPL-3.0 — the reason this work is AGPL-3.0)
 - **headunit (Trevelopment / Bryan Adams et al.)** — <https://github.com/Trevelopment/headunit>.
   The HUD guidance sender (`mazda/patches/blmjcicarplay/hud/hud_send.cpp` and `hud_send.h`) is
-  adapted from it; the vendored CMU D-Bus proxies (`mazda/dbus/`) are taken from it; and the
-  cross-compile build pattern follows it. Those files carry `SPDX-License-Identifier:
+  adapted from it, and the cross-compile build pattern follows it. (An earlier copy of its
+  vendored CMU D-Bus proxies, `mazda/dbus/`, was unused and has been removed.) Those files carry `SPDX-License-Identifier:
   AGPL-3.0-or-later` headers referencing the original. This is the only third-party code reused
   here.
 

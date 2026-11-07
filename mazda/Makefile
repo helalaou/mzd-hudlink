@@ -19,17 +19,6 @@ SYSROOT     := $(M3TOOLCHAIN)/$(TRIPLE)/sysroot
 
 PATCH := blmjcicarplay
 
-# pkg-config wrapper pointed at the device sysroot (resolves the cross-compiled
-# .pc files, not the host's). The CarPlay shim talks to the HUD via the OEM
-# libjcidbus transport (patches/blmjcicarplay/oem/), so it does NOT actually link
-# dbus-c++; --as-needed below drops the unused dep. The -cflags are still listed
-# for parity with the upstream Makefile (harmless if unreferenced).
-PKG_CONFIG := PKG_CONFIG_LIBDIR=$(SYSROOT)/usr/lib/pkgconfig \
-              PKG_CONFIG_SYSROOT_DIR=$(SYSROOT) pkg-config
-PKGS       := dbus-c++-1 dbus-1
-PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PKGS) 2>/dev/null)
-PKG_LIBS   := $(shell $(PKG_CONFIG) --libs   $(PKGS) 2>/dev/null)
-
 # Build-time options (define to taste):
 #   CARPLAY_NO_SPLIM      = HUD shows maneuver + distance + road-name only,
 #                              never a posted speed-limit (this is the "HUD nav only"
@@ -47,13 +36,10 @@ COMMON_CXXFLAGS := -std=c++11 \
                    -fPIC \
                    -fvisibility=hidden \
                    -D_GLIBCXX_USE_CXX11_ABI=0 \
-                   -Idbus \
-                   $(PKG_CFLAGS) \
                    $(FEATURE_FLAGS)
 COMMON_LDFLAGS  := --sysroot=$(SYSROOT) -shared \
                    -Wl,--no-undefined \
-                   -lpthread -ldl \
-                   -Wl,--as-needed $(PKG_LIBS) -Wl,--no-as-needed
+                   -lpthread -ldl
 
 RELEASE_CXXFLAGS := $(COMMON_CXXFLAGS) -O3 -DNDEBUG -ffunction-sections -fdata-sections -flto
 RELEASE_LDFLAGS  := $(COMMON_LDFLAGS) -O3 -flto -Wl,--gc-sections -Wl,-s
