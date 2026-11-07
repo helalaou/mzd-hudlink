@@ -224,46 +224,9 @@ void arm_navi(const char *from, void *procH, void *devH)
 typedef long (*pfn_msgrcv)(int, void *, unsigned, long, int);
 pfn_msgrcv      g_real_msgrcv = nullptr;
 
-// [DIAGNOSTIC] Defining CARPLAY_NAV_DIAG compiles in a full-payload dump of every
-// maneuver(0x8059)+guidance(0x8058) to /data_persist/nav_diag.log — used to RE the
-// distance / turn-type / road-name field offsets on a real drive (privacy: the nav
-// payload is location data). SHIP build leaves it UNDEFINED (diag off). NOTE the block
-// below gates on `#ifdef` = *defined-or-not*, NOT on a 0/1 value — so a
-// `#define CARPLAY_NAV_DIAG 0` would WRONGLY keep it ON. To enable for RE, add a bare
-// `#define CARPLAY_NAV_DIAG` here (no value); for ship leave it absent.
-// [SHIP=OFF, BUILD-19] CARPLAY_NAV_DIAG is NOT defined here so ship builds write NO nav_diag.log.
-// For a bench RE build, pass -DCARPLAY_NAV_DIAG on the make line (CXXFLAGS) instead of editing this file,
-// so diag can never accidentally ship on. Ship gate: `strings <the .so> | grep nav_diag` must be EMPTY.
-
-// [NAV-END RE] Temporary: log EVERY received message's (time,type,size) + a payload peek for
-// the small (<0x300) messages the HUD path skips — to find the iAP2 "navigation stopped"
-// signal. AA gets it decoded as a Status event (kTagStatus); the CarPlay raw tap filters it
-// out by size, so the bridge can't clear on nav-end (only on a 6s staleness timeout). Drive,
-// END NAVIGATION (+ unplug), then look at what type appears as the 0x8058/0x8059 stream stops.
-// (Superseded by the OEM com.jci.carplay TBT-status subscribe below — no longer needed.)
-// SHIP build leaves it UNDEFINED (diag off). Same `#ifdef` trap as CARPLAY_NAV_DIAG above:
-// `#define CARPLAY_MSGTYPE_DIAG 0` would WRONGLY keep it ON. To enable for RE, add a bare
-// `#define CARPLAY_MSGTYPE_DIAG` here; for ship leave it absent.
-
 void msg_tap(int msqid, const void *msgp, long n)
 {
     (void)msqid;
-#ifdef CARPLAY_MSGTYPE_DIAG
-    if (msgp && n >= 4) {
-        static FILE *tf = nullptr;
-        if (!tf) { tf = fopen("/data_persist/msgtype_diag.log", "a"); if (tf) setvbuf(tf, nullptr, _IOLBF, 0); }
-        if (tf) {
-            uint32_t mt = (*(const uint32_t *)msgp) & 0xffff;
-            fprintf(tf, "t=%ld mt=0x%04x n=0x%lx", (long)time(nullptr), (unsigned)mt, n);
-            if (mt != 0x8058 && mt != 0x8059) {          // peek the unknown / small messages
-                const unsigned char *b = (const unsigned char *)msgp;
-                long dn = (n < 40) ? n : 40;
-                for (long i = 0; i < dn; i++) fprintf(tf, " %02x", b[i]);
-            }
-            fprintf(tf, "\n");
-        }
-    }
-#endif
     // Only big messages: maneuver=0x348, guidance=0x640. Skips chatty small msgs.
     if (n < 0x300 || !msgp) return;
     // Decode maneuver -> HUD (passive read of the received buffer). The shipped
@@ -271,21 +234,6 @@ void msg_tap(int msqid, const void *msgp, long n)
     // payload to /data_persist/nav_msgrcv.log + nav_probe_MANEUVER_SEEN.txt was
     // removed (the user's maneuver text is location data; also avoids flash wear).
     nav_on_devmgr_msg(msgp, n);
-#ifdef CARPLAY_NAV_DIAG
-    {
-        long mt = (*(const long *)msgp) & 0xffff;
-        if (mt == 0x8059 || mt == 0x8058) {
-            static FILE *df = nullptr;
-            if (!df) { df = fopen("/data_persist/nav_diag.log", "a"); if (df) setvbuf(df, nullptr, _IOLBF, 0); }
-            if (df) {
-                const unsigned char *b = (const unsigned char *)msgp;
-                fprintf(df, "msgrcv n=0x%lx mtype=%ld :", n, *(const long *)msgp);
-                for (long i = 0; i < n; i++) fprintf(df, " %02x", b[i]);
-                fprintf(df, "\n");
-            }
-        }
-    }
-#endif
 }
 
 } // namespace

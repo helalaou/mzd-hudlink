@@ -481,29 +481,6 @@ bool send_one(const NaviSnapshot &cur,
             icon = kTurnIcons[cur.turn_event][side_idx];
         }
 
-#ifdef DEBUG
-        // Debug aid: when our mapping produced no glyph, hijack the street
-        // strip to show the raw codes so an observer can record + extend the
-        // table later. Stripped in release builds.
-        char dbg_label[33];
-        if (icon == 0) {
-            snprintf(dbg_label, sizeof(dbg_label), "EV=%u S=%u A=%d",
-                     static_cast<unsigned>(cur.turn_event),
-                     static_cast<unsigned>(cur.turn_side),
-                     static_cast<int>(cur.turn_angle));
-            // The dbg_label tracks the raw turn fields, so re-page when it changes even
-            // though the maneuver fields did not already trigger a bump above.
-            if (!maneuver_changed) {
-                sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);
-            }
-            road = dbg_label;
-            msg2.guidancePointName = road.c_str();
-            msg2.syncBit           = sync_bit;
-            icon = MazdaIcon::HUD_STRAIGHT;
-            // Msg2 is sent below on (distance_changed || splim_changed || force), already true here.
-        }
-#endif
-
         // [4.3] never emit unit=0 with a live maneuver. [4.5] clamp distance to
         // uint16 so a far maneuver (>65535) can't wrap to a tiny value.
         int32_t draw = cur.distance_dec;
