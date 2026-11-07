@@ -4,8 +4,8 @@ mazda/build/
 *.d
 *.so
 
-# The toolchain is a git submodule, not checked in directly
-mazda/m3-toolchain/
+# The toolchain is a separate project, never checked in
+mazda/m3-toolchain
 
 # Editor / OS cruft
 .vscode/

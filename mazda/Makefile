@@ -4,15 +4,16 @@
 #   build/release/libpatch-blmjcicarplay.so   (default: `make` or `make release`)
 #   build/debug/libpatch-blmjcicarplay.so     (`make debug`)
 #
-# Toolchain: the ARM Cortex-A9 NEON / glibc cross-compiler in the ./m3-toolchain
-# git submodule (lmagder/m3-toolchain — an independent, third-party cross-compiler).
-# After cloning:  git submodule update --init --recursive
+# Toolchain: the ARM Cortex-A9 NEON / glibc cross-compiler from lmagder/m3-toolchain
+# (an independent, third-party project). Point M3TOOLCHAIN at a checkout of it:
+#   make M3TOOLCHAIN=/path/to/m3-toolchain
+# The default is ./m3-toolchain next to this Makefile.
 #
 # The shim has NO licensing / DRM / network code — it is a plain LD_PRELOAD bridge
 # that decodes Apple iAP2 turn-by-turn from the OEM jciCARPLAY process and forwards
 # it to the OEM navigation HUD D-Bus API (com.jci.vbs.navi).
 
-M3TOOLCHAIN := ./m3-toolchain
+M3TOOLCHAIN ?= ./m3-toolchain
 TRIPLE      := arm-cortexa9_neon-linux-gnueabi
 CXX         := $(M3TOOLCHAIN)/bin/$(TRIPLE)-g++
 SYSROOT     := $(M3TOOLCHAIN)/$(TRIPLE)/sysroot
