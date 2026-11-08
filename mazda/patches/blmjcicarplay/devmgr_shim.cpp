@@ -189,12 +189,12 @@ void carplay_status_start(void)
     if (!g_cp_client_lib) { LOGW("carplay_status: dlopen libjcicarplay_client.so failed: %s", dlerror()); return; }
     g_cp_tbt_enable      = (pfn_cp_enable)cp_resolve("CARPLAY_TurnByTurnEntitySignal_enable");
     g_cp_deactive_enable = (pfn_cp_enable)cp_resolve("CARPLAY_SessionDeactiveSignal_enable");
-    if (!g_cp_tbt_enable) { LOGW("carplay_status: TurnByTurnEntitySignal_enable unresolved — staleness only"); return; }
+    if (!g_cp_tbt_enable) { LOGW("carplay_status: TurnByTurnEntitySignal_enable unresolved, the HUD will not clear at navigation end"); return; }
 
     g_cp_hmi_conn = JCIDBUS_conn_create(reinterpret_cast<void *>(&cp_hmi_err), 0);
     if (!g_cp_hmi_conn) { LOGW("carplay_status: HMI conn_create failed"); return; }
     if (JCIDBUS_conn_connect(g_cp_hmi_conn, "com.jci.carplay.hudstatus", kJciHmiBus, nullptr) == 0) {
-        LOGW("carplay_status: HMI conn_connect failed — staleness only");
+        LOGW("carplay_status: HMI conn_connect failed, the HUD will not clear at navigation end");
         JCIDBUS_conn_free(g_cp_hmi_conn); g_cp_hmi_conn = nullptr; return;
     }
     JCIDBUS_worker_start(g_cp_hmi_conn);

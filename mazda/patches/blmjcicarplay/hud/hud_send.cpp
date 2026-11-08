@@ -384,11 +384,10 @@ bool send_one(const NaviSnapshot &cur,
     // both messages together, road name included, even when only the distance
     // changed. A road name sent on its own would fade out on the HUD between
     // turns.
-    LOGV("hud_send: SetHUDDisplayMsgReq icon=%u dist=%u unit=%u splim=%u sync=%u",
+    LOGV("hud_send: SetHUDDisplayMsgReq icon=%u dist=%u unit=%u sync=%u",
          static_cast<unsigned>(disp.nextManeuverInfo),
          static_cast<unsigned>(disp.distanceValue),
          static_cast<unsigned>(disp.distanceUnit),
-         static_cast<unsigned>(disp.displaySpeedLimit),
          static_cast<unsigned>(disp.text_ID3));
     int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &disp, nullptr, nullptr, nullptr);
     if (rc != 0) { LOGE("hud_send: SetHUDDisplayMsgReq failed rc=%d", rc); return false; }
@@ -501,7 +500,7 @@ void *sender_main(void *)
     if (pthread_create(&g_ticker_thread, nullptr, ticker_main, nullptr) == 0) {
         g_ticker_up = true;
     } else {
-        LOGC("hud sender: failed to spawn splim ticker (HUD still works on CarPlay changes)");
+        LOGC("hud sender: failed to start the keep-alive ticker (the HUD still updates on changes)");
     }
 
     NaviSnapshot prev = {};
