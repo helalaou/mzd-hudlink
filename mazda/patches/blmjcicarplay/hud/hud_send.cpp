@@ -333,87 +333,77 @@ bool send_one(const NaviSnapshot &cur,
     // No HUD in this car.
     if (g_hud_absent.load(std::memory_order_acquire)) return true;
 
-    bool maneuver_changed = (std::strncmp(cur.road_name, prev.road_name,
-                                          sizeof(cur.road_name)) != 0) ||
-                            cur.turn_event  != prev.turn_event ||
-                            cur.turn_side   != prev.turn_side  ||
-                            cur.turn_number != prev.turn_number;
-    bool distance_changed = maneuver_changed ||
-                            cur.distance_dec  != prev.distance_dec  ||
-                            cur.distance_unit != prev.distance_unit ||
-                            cur.turn_angle    != prev.turn_angle;
+    const bool maneuver_changed =
+        std::strncmp(cur.road_name, prev.road_name, sizeof(cur.road_name)) != 0 ||
+        cur.turn_event  != prev.turn_event ||
+        cur.turn_side   != prev.turn_side  ||
+        cur.turn_number != prev.turn_number;
+    const bool changed = maneuver_changed ||
+        cur.distance_dec  != prev.distance_dec  ||
+        cur.distance_unit != prev.distance_unit ||
+        cur.turn_angle    != prev.turn_angle;
+    if (!changed && !force) return true;
 
-    if (!maneuver_changed && !distance_changed && !force)
-        return true;  // nothing to send = OK (not a failure)
+    // A new sync_bit value (cycling 1..7) makes the HUD redraw. It changes
+    // whenever the maneuver changes, even if the road name is the same;
+    // distance updates and keep-alives leave it alone.
+    if (maneuver_changed) {
+        sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);
+    }
 
-    VbsNaviHudDisplay disp = {};   // turn icon and distance
-    VbsNaviHudMsg2    msg2 = {};   // road name
-    std::string       road;        // holds the text msg2.guidancePointName points at
+    // Road name.
+#if CARPLAY_VN_NORMALIZE
+    char hud_name[sizeof(cur.road_name)];
+    normalize_vn(cur.road_name, hud_name, sizeof(hud_name));
+    std::string road = hud_name;
+#else
+    std::string road = cur.road_name;
+#endif
+    // An empty road name makes the HUD draw garbage; a space draws nothing.
+    if (road.empty()) road = " ";
+    VbsNaviHudMsg2 msg2 = {};
+    msg2.guidancePointName = road.c_str();
+    msg2.syncBit           = sync_bit;
+
+    // Turn icon and distance.
+    uint32_t icon = 0;
+    if (cur.turn_event == 13 /*TURN_ROUNDABOUT_ENTER_AND_EXIT*/) {
+        int32_t side_lr = (cur.turn_side == 1) ? 0 : 1;
+        icon = roundabout_icon(cur.turn_angle, side_lr);
+    } else if (cur.turn_event < 20) {
+        int32_t side_idx = static_cast<int32_t>(cur.turn_side) - 1;
+        if (side_idx < 0 || side_idx > 2) side_idx = 2;
+        icon = kTurnIcons[cur.turn_event][side_idx];
+    }
+    // Never send unit 0 with a maneuver, and clamp the distance to 16 bits so
+    // a far-away maneuver cannot wrap round to a small number.
+    int32_t draw = cur.distance_dec;
+    if (draw < 0)      draw = 0;
+    if (draw > 0xFFFF) draw = 0xFFFF;
+    VbsNaviHudDisplay disp = {};
+    disp.nextManeuverInfo = icon;
+    disp.distanceValue    = static_cast<uint16_t>(draw);
+    disp.distanceUnit     = cur.distance_unit ? cur.distance_unit
+                                              : static_cast<uint8_t>(1);
+    disp.text_ID3         = sync_bit;
 
     // Like the built-in navigation (thUpdateGuidanceChangeToHUD), always send
     // both messages together, road name included, even when only the distance
     // changed. A road name sent on its own would fade out on the HUD between
     // turns.
-    if (distance_changed || force) {
-        // A new sync_bit value (cycling 1..7) makes the HUD redraw. It changes
-        // whenever the maneuver changes, even if the road name is the same;
-        // distance updates and keep-alives leave it alone.
-        if (maneuver_changed) {
-            sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);
-        }
+    LOGV("hud_send: SetHUDDisplayMsgReq icon=%u dist=%u unit=%u splim=%u sync=%u",
+         static_cast<unsigned>(disp.nextManeuverInfo),
+         static_cast<unsigned>(disp.distanceValue),
+         static_cast<unsigned>(disp.distanceUnit),
+         static_cast<unsigned>(disp.displaySpeedLimit),
+         static_cast<unsigned>(disp.text_ID3));
+    int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &disp, nullptr, nullptr, nullptr);
+    if (rc != 0) { LOGE("hud_send: SetHUDDisplayMsgReq failed rc=%d", rc); return false; }
 
-#if CARPLAY_VN_NORMALIZE
-        char hud_name[sizeof(cur.road_name)];
-        normalize_vn(cur.road_name, hud_name, sizeof(hud_name));
-        road = hud_name;
-#else
-        road = cur.road_name;
-#endif
-        // An empty road name makes the HUD draw garbage; a space draws nothing.
-        if (road.empty()) road = " ";
-        msg2.guidancePointName = road.c_str();
-        msg2.syncBit           = sync_bit;
-    }
-
-    if (distance_changed || force) {
-        uint32_t icon = 0;
-        if (cur.turn_event == 13 /*TURN_ROUNDABOUT_ENTER_AND_EXIT*/) {
-            int32_t side_lr = (cur.turn_side == 1) ? 0 : 1;
-            icon = roundabout_icon(cur.turn_angle, side_lr);
-        } else if (cur.turn_event < 20) {
-            int32_t side_idx = static_cast<int32_t>(cur.turn_side) - 1;
-            if (side_idx < 0 || side_idx > 2) side_idx = 2;
-            icon = kTurnIcons[cur.turn_event][side_idx];
-        }
-
-        // Never send unit 0 with a maneuver, and clamp the distance to 16 bits
-        // so a far-away maneuver cannot wrap round to a small number.
-        int32_t draw = cur.distance_dec;
-        if (draw < 0)      draw = 0;
-        if (draw > 0xFFFF) draw = 0xFFFF;
-        disp.nextManeuverInfo  = icon;
-        disp.distanceValue     = static_cast<uint16_t>(draw);
-        disp.distanceUnit      = cur.distance_unit ? cur.distance_unit
-                                                   : static_cast<uint8_t>(1);
-        disp.text_ID3          = sync_bit;
-    }
-
-    if (distance_changed || force) {
-        LOGV("hud_send: SetHUDDisplayMsgReq icon=%u dist=%u unit=%u splim=%u sync=%u",
-             static_cast<unsigned>(disp.nextManeuverInfo),
-             static_cast<unsigned>(disp.distanceValue),
-             static_cast<unsigned>(disp.distanceUnit),
-             static_cast<unsigned>(disp.displaySpeedLimit),
-             static_cast<unsigned>(disp.text_ID3));
-        int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &disp, nullptr, nullptr, nullptr);
-        if (rc != 0) { LOGE("hud_send: SetHUDDisplayMsgReq failed rc=%d", rc); return false; }
-    }
-    if (distance_changed || force) {
-        LOGV("hud_send: SetHUD_Display_Msg2 road=\"%s\" sync=%u",
-             road.c_str(), static_cast<unsigned>(msg2.syncBit));
-        int rc = VBS_NAVI_TMC_SetHUD_Display_Msg2(g_conn, &msg2, nullptr, nullptr, nullptr);
-        if (rc != 0) { LOGE("hud_send: SetHUD_Display_Msg2 failed rc=%d", rc); return false; }
-    }
+    LOGV("hud_send: SetHUD_Display_Msg2 road=\"%s\" sync=%u",
+         road.c_str(), static_cast<unsigned>(msg2.syncBit));
+    rc = VBS_NAVI_TMC_SetHUD_Display_Msg2(g_conn, &msg2, nullptr, nullptr, nullptr);
+    if (rc != 0) { LOGE("hud_send: SetHUD_Display_Msg2 failed rc=%d", rc); return false; }
     return true;
 }
 
