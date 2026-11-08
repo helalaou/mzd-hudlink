@@ -162,7 +162,7 @@ void cp_deactive_cb(void *a0, void *a1, void *a2, void *a3)
 {
     (void)a0; (void)a1; (void)a2; (void)a3;
     LOGD("carplay SessionDeactive (session ended)");
-    hud_request_fullclear();
+    hud_request_clear();
 }
 
 void *cp_resolve(const char *name)

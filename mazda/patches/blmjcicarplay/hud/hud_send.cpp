@@ -279,8 +279,7 @@ std::mutex              g_cv_mu;
 std::atomic<bool>       g_stop{false};          // the sender should stop
 std::atomic<uint32_t>   g_tick{0};              // counts keep-alive ticks
 std::atomic<bool>       g_have_guidance{false}; // a route is active: repeat the frame on each tick
-std::atomic<bool>       g_clear_req{false};     // CarPlay navigation ended: clear the HUD
-std::atomic<bool>       g_fullclear_req{false}; // the CarPlay session ended: clear the HUD
+std::atomic<bool>       g_clear_req{false};     // navigation ended: clear the HUD
 
 // The service bus connection. Created, used and freed by the sender thread
 // only.
@@ -546,18 +545,8 @@ void *sender_main(void *)
         // flag; the clear happens here, so the snapshot keeps a single writer.
         // The HUD is not cleared just because updates pause, as they do while
         // the car waits at a light.
-        bool full_req = g_fullclear_req.exchange(false, std::memory_order_relaxed);
-        bool nav_req  = g_clear_req.exchange(false, std::memory_order_relaxed);
-        if (full_req) {
-            LOGD("hud: CarPlay session gone -> full HUD wipe (incl sign)");
-            if (send_clear(sync_bit)) {
-                g_have_guidance.store(false, std::memory_order_relaxed);
-                prev       = {};
-                last_processed = g_seq.load(std::memory_order_acquire);
-                nav_request_reset();
-            }
-        } else if (nav_req) {
-            LOGD("hud: CarPlay TBT off (still connected) -> maneuver off, keep sign");
+        if (g_clear_req.exchange(false, std::memory_order_relaxed)) {
+            LOGD("hud: navigation ended, clearing the HUD");
             if (send_clear(sync_bit)) {
                 g_have_guidance.store(false, std::memory_order_relaxed);
                 prev       = {};
@@ -637,17 +626,11 @@ void hud_send_stop(void)
     LOGD("hud_send_stop: sender thread stopped, OEM D-Bus released");
 }
 
-// Called on the OEM D-Bus worker thread (devmgr_shim.cpp). They only set a
-// flag and wake the sender, which does the clear.
+// Called on the OEM D-Bus worker thread (devmgr_shim.cpp). Only sets a flag;
+// the sender clears the HUD on its next pass, within half a second.
 void hud_request_clear(void)
 {
     g_clear_req.store(true, std::memory_order_relaxed);
-    g_cv.notify_one();
-}
-
-void hud_request_fullclear(void)
-{
-    g_fullclear_req.store(true, std::memory_order_relaxed);
     g_cv.notify_one();
 }
 

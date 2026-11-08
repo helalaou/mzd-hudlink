@@ -35,12 +35,9 @@ extern "C" void nav_on_devmgr_msg(const void *msgp, long n);
 // ---- hud/hud_send.cpp -------------------------------------------------------
 void hud_send_start(void);
 void hud_send_stop(void);
-// Clear the HUD because CarPlay navigation ended (the phone stays connected).
-// Safe to call from any thread.
+// Clear the HUD: CarPlay navigation or the CarPlay session ended. Safe to
+// call from any thread.
 void hud_request_clear(void);
-// Clear the HUD because the CarPlay session ended. Safe to call from any
-// thread.
-void hud_request_fullclear(void);
 
 // ---- main.cpp ---------------------------------------------------------------
 // True when /proc/self/cmdline shows this is the jciCARPLAY launcher.
