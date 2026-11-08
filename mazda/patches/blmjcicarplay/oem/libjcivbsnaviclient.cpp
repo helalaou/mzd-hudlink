@@ -5,9 +5,8 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// Self-resolving thunks for the OEM HUD setters (libjcivbsnaviclient).
-// See libjcivbsnaviclient.h for the rationale and the hand-derived
-// ABI, and oem_thunk.h for the OEM_THUNK macro.
+// Thunks for the libjcivbsnaviclient functions in libjcivbsnaviclient.h
+// (see oem_thunk.h).
 
 #define LOG_TAG "LIBJCIVBSNAVICLIENT"
 #include "../log.h"
@@ -19,11 +18,10 @@
 
 namespace {
 
-// Resolve one symbol by name. The OEM client lib is normally already
-// resident (transitive DT_NEEDED via the lds-dbus client libs); we
-// still dlopen it (RTLD_NOW|RTLD_GLOBAL, refcount bump) once so we
-// don't depend on that incidental chain across firmware versions, and
-// fall back to the global scope if the dlopen didn't take.
+// Looks up one libjcivbsnaviclient function. The library is normally loaded
+// already, pulled in by other OEM client libraries; opening it here as well
+// means the lookup does not depend on that. If the dlopen fails, search the
+// whole process instead.
 void *oem_sym(const char *name)
 {
 	static void *handle = dlopen("libjcivbsnaviclient.so",

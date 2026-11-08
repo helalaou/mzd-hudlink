@@ -5,24 +5,24 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// Shared self-resolving-thunk macros for the hand-written OEM bindings
-// under oem/. Each binding .cpp provides its own file-local resolver:
+// Macros that define the OEM bindings in oem/ as thunks.
 //
-//   void *oem_sym(const char *name);   // dlsym from the right library
+// Each binding .cpp defines its own file-local lookup function,
 //
-// then declares each OEM prototype's body with these macros. A thunk
-// resolves the real OEM symbol of the same name on first call, caches
-// it in a function-local static (C++11 "magic static" — thread-safe
-// init), and forwards. An unresolved symbol degrades to the supplied
-// benign failure value instead of crashing.
+//   void *oem_sym(const char *name);   // dlsym() in the right library
 //
-// `params` and `args` are parenthesised lists, e.g.
+// and then one OEM_THUNK or OEM_THUNK_VOID per function. On its first call a
+// thunk looks up the OEM function of the same name, keeps the pointer in a
+// function-local static (initialised once, thread-safely, as C++11
+// guarantees) and calls it. If the function is missing, the thunk returns
+// `failval` instead.
+//
+// `params` and `args` are lists in parentheses, for example
 //   OEM_THUNK(int, Foo, (void *a, int b), (a, b), -1)
 //
-// The thunks are ordinary (mangled, hidden-visibility) C++ functions,
-// so even though they reuse the OEM names they do NOT interpose the
-// real C symbols from this LD_PRELOAD .so — `dlsym(handle, "<name>")`
-// inside oem_sym still fetches the genuine library function.
+// The thunks are C++ functions with hidden visibility. Although they share
+// the OEM names, they do not replace the OEM functions for anyone else, and
+// dlsym() inside oem_sym() still finds the OEM function.
 
 #ifndef LIBPATCH_BLMJCICARPLAY_OEM_THUNK_H
 #define LIBPATCH_BLMJCICARPLAY_OEM_THUNK_H

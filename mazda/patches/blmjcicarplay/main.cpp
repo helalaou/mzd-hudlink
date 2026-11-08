@@ -5,16 +5,17 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// Patch entry point for the CarPlay->HUD bridge. Runs at LD_PRELOAD time,
-// before sm_svclauncher dlopen's /jci/carplay/blmjcicarplay.so.
+// Entry point. The constructor below runs when the dynamic loader maps the
+// library (LD_PRELOAD), before sm_svclauncher loads
+// /jci/carplay/blmjcicarplay.so.
 //
-// Self-gate: unlike blmjciaapa.so (which exports GetServiceInterfaces and can
-// be probed with dlopen+dlsym), blmjcicarplay.so exports no usable anchor, so
-// we gate on /proc/self/cmdline instead — the launcher is invoked as
-//   {L_jciCARPLAY} /jci/sm/sm_svclauncher -l jciCARPLAY /jci/carplay/blmjcicarplay.so 0 -a
-// If we are not in that PID we stay completely inert (the PLT shims in
-// devmgr_shim.cpp still chain straight through to the real libdevmgr_interface
-// impls, so any other process that happens to inherit LD_PRELOAD is unaffected).
+// The library is only active inside the jciCARPLAY process, which the
+// system manager starts as
+//   sm_svclauncher -l jciCARPLAY /jci/carplay/blmjcicarplay.so 0 -a
+// blmjcicarplay.so exports nothing that could be probed with dlsym(), so the
+// check reads /proc/self/cmdline instead. Any other process that inherits
+// LD_PRELOAD keeps g_enabled false, and the hooks in devmgr_shim.cpp then
+// only pass calls through to the real functions.
 
 #include "patch.h"
 
@@ -42,9 +43,11 @@ pid_t gettid_compat(void)
 #endif
 }
 
-// Fatal-signal diagnostics (SEGV/BUS/ABRT/FPE/ILL). On ARM the unwinder can't
-// pass the kernel sigreturn trampoline, so we print the raw register state +
-// /proc/self/maps and re-raise for a core. Async-signal-safe primitives only.
+// On SIGSEGV, SIGBUS, SIGABRT, SIGFPE or SIGILL, writes the signal, the
+// registers, a backtrace and /proc/self/maps to stderr, then re-raises the
+// signal with the default action. The ARM unwinder cannot step past the
+// kernel's signal trampoline, so the registers and the memory map are what
+// locate the fault. Only async-signal-safe calls are used.
 void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 {
     static const char hdr[] =
@@ -108,6 +111,7 @@ void install_fatal_handler(void)
     sigaction(SIGILL,  &sa, nullptr);
 }
 
+// /proc/self/cmdline with the NUL separators turned into spaces.
 static int read_cmdline(char *out, size_t outsz)
 {
     if (!out || outsz == 0) return 0;
@@ -124,12 +128,10 @@ static int read_cmdline(char *out, size_t outsz)
 
 } // namespace
 
-// Exposed for devmgr_shim.cpp's lazy gate.
 bool in_carplay_launcher(void)
 {
     char cmdline[512];
     read_cmdline(cmdline, sizeof(cmdline));
-    // Launcher cmdline contains both the service tag and the OEM .so path.
     return (strstr(cmdline, "jciCARPLAY") != nullptr) ||
            (strstr(cmdline, "blmjcicarplay.so") != nullptr);
 }
@@ -138,13 +140,13 @@ __attribute__((constructor))
 static void on_load(void)
 {
     if (!in_carplay_launcher()) {
-        // Not our PID (could be the once-a-second killall watchdog child that
-        // inherits LD_PRELOAD). Stay silent + inert.
+        // Some other process that inherited LD_PRELOAD, such as a child the
+        // launcher starts. Do nothing.
         return;
     }
     g_enabled = true;
-    // Open the bring-up log file (stderr is swallowed by syslog-ng). Append so
-    // multiple boots accumulate; line-buffered so tail -f sees lines live.
+    // The log file is in /tmp (RAM), appended to across restarts of the
+    // process and line-buffered so `tail -f` shows lines as they come.
     g_logf = std::fopen("/tmp/carplay_bridge.log", "a");
     if (g_logf) std::setvbuf(g_logf, nullptr, _IOLBF, 0);
     install_fatal_handler();

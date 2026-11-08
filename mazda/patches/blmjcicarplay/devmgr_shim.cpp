@@ -5,22 +5,27 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// PLT shadows for the devmgr client API that jciCARPLAY (blmjcicarplay.so)
-// imports from /usr/lib/libdevmgr_interface.so, PLUS a libc `msgrcv` interposer
-// that passively taps the device-manager receive path.
+// Hooks into the device manager client API (libdevmgr_interface.so) that
+// jciCARPLAY uses to talk to the iPhone, and into libc msgrcv().
 //
-// Why msgrcv: RE of eDevMgrRegisterProcess + the dispatch loop (FUN_000402c8 in
-// libdevmgr_interface.so) shows the process handle stores cbTable@+0x6c, ctx@+0x70,
-// msgq@+0x14, and the receive thread (vDevMgrProcessRcvThread, running INSIDE the
-// jciCARPLAY process) pulls every event with race_msg_queue_receivemessage ->
-// libc `msgrcv` (imported via PLT, confirmed). ipoddev's viAP2NavRouteManeuverUpdate
-// pushes a 0x348-byte message (guidance = 0x640). So interposing msgrcv lets us
-// SEE every message ipoddev delivers — including maneuvers — without touching the
-// OEM vtable/dispatch (zero crash risk, fully passive: we always chain the real
-// call and never alter the data). This is BOTH a definitive probe (does iOS ever
-// send maneuvers?) AND the hook point a future build-2b can decode -> hud_send.
+// Arming. Once a CarPlay session is up, jciCARPLAY calls
+// eDevMgriPodStartCallStateUpdates, eDevMgriPodStartCommunicationUpdates and
+// eDevMgriPodSendLocationInformation. The wrappers below pass each call on
+// unchanged and then arm navigation (arm_navi): start the HUD sender,
+// subscribe to the OEM CarPlay status signals, and ask the iPhone for route
+// guidance with eDevMgriPodStartNaviRouteGuidenceUpdates, which jciCARPLAY
+// never calls on its own. A background thread repeats that request every
+// 5 seconds for the life of the process.
 //
-// ARM EABI: devmgr fns take args in r0..r3; we declare 4 void* and forward all.
+// Receiving. The device manager's receive thread (vDevMgrProcessRcvThread)
+// runs inside jciCARPLAY and takes every iAP2 event off a System V message
+// queue with msgrcv() (found by disassembling libdevmgr_interface.so). The
+// msgrcv() wrapper calls the real function and, once navigation is armed,
+// hands the large messages to nav.cpp. It never changes a message, so
+// jciCARPLAY receives exactly what it would without the bridge.
+//
+// Every wrapped devmgr function takes four word-sized arguments in r0..r3
+// (ARM EABI), so each is declared with four void* and forwards all four.
 
 #include "patch.h"
 #include "oem/libjcidbus.h"
@@ -47,7 +52,7 @@ pfn4  g_real_startnavi = nullptr;
 void *g_devmgr_handle = nullptr;
 pthread_mutex_t g_mu        = PTHREAD_MUTEX_INITIALIZER;
 bool            g_navi_armed = false;
-volatile int    g_armed      = 0;   // set once a live CarPlay session has armed nav; gates the passive msgrcv tap (no tapping until a nav session is up)
+volatile int    g_armed      = 0;   // set by arm_navi(); until then the msgrcv hook only passes through
 void *g_procH = nullptr;
 void *g_devH  = nullptr;
 
@@ -56,6 +61,7 @@ extern "C" int eDevMgriPodStartCallStateUpdates(void *, void *, void *, void *);
 extern "C" int eDevMgriPodStartCommunicationUpdates(void *, void *, void *, void *);
 extern "C" int eDevMgriPodSendLocationInformation(void *, void *, void *, void *);
 
+// True if `a` is one of the wrappers in this file rather than the OEM function.
 bool addr_is_own(void *a)
 {
     return a == (void *)&eDevMgrRegisterProcess ||
@@ -64,6 +70,9 @@ bool addr_is_own(void *a)
            a == (void *)&eDevMgriPodSendLocationInformation;
 }
 
+// The real libdevmgr_interface function behind one of the wrappers.
+// dlsym(RTLD_NEXT) normally finds it; if that yields a wrapper instead, look
+// the name up in the already-loaded library itself.
 void *resolve_oem(const char *name)
 {
     void *p = dlsym(RTLD_NEXT, name);
@@ -89,6 +98,8 @@ void resolve_all_once(void)
     if (!g_real_startnavi) g_real_startnavi = (pfn4)resolve_oem("eDevMgriPodStartNaviRouteGuidenceUpdates");
 }
 
+// Repeats the route guidance request every 5 seconds, alternating the third
+// argument between 0 and 0x5555.
 void *navi_retry_thread(void *)
 {
     int n = 0;
@@ -104,20 +115,22 @@ void *navi_retry_thread(void *)
     return nullptr;
 }
 
-// ===== [NAV-END via OEM CarPlay TBT status] =================================
-// The OEM blmjcicarplay.so (this very process) broadcasts the explicit CarPlay
-// nav-status on the HMI bus's com.jci.carplay interface — the same event AA gets
-// decoded from the AAP SDK, which the CarPlay bridge previously lacked (it only
-// cleared via a 6s staleness timer). We SUBSCRIBE to it using the OEM's own
-// generated client stubs (libjcicarplay_client.so), so the OEM does the match +
-// decode for us. Signals of interest:
-//   TurnByTurnEntitySignal(entityType u): 0=NONE 1=CARPLAY 2=NATIVE — who owns TBT.
-//   SessionDeactiveSignal: CarPlay session ended (e.g. phone unplugged).
-// cb ABI (RE-confirmed byte-exact: client dispatcher signal_carplay_* @0xb2d0 +
-// consumer svcjcinavi CP_RoutingStatusChanged_cb @0x2e0c4): the worker calls
-//   cb(r0=conn, r1=<field0 ptr>, r2=<field1/aux ptr>, r3=userdata)
-// with each decoded field delivered BY POINTER (deref r1 for the u32), userdata in
-// r3, and r1/r2 freed right after the callback returns (copy out, don't retain).
+// ---- CarPlay status signals ----------------------------------------------
+// jciCARPLAY publishes CarPlay's state on the HMI bus (interface
+// com.jci.carplay). The bridge subscribes to two of its signals through the
+// OEM's own client library, libjcicarplay_client.so, which does the D-Bus
+// matching and decoding:
+//   TurnByTurnEntitySignal(entityType)  who shows turn-by-turn directions:
+//                                       0 nobody, 1 CarPlay, 2 the built-in
+//                                       navigation
+//   SessionDeactiveSignal               the CarPlay session ended
+// The HUD is cleared when CarPlay stops showing directions and when the
+// session ends.
+//
+// Callback ABI, from the client library's signal dispatcher and from
+// svcjcinavi, which listens to the same signals: cb(conn, field0 *, field1 *,
+// userdata). Fields arrive by pointer and are freed as soon as the callback
+// returns, so copy anything that is needed later.
 typedef int (*pfn_cp_enable)(void *conn, int enable, void *cb, void *userdata);
 pfn_cp_enable g_cp_tbt_enable      = nullptr;
 pfn_cp_enable g_cp_deactive_enable = nullptr;
@@ -128,8 +141,8 @@ bool  g_cp_subscribed = false;
 void cp_hmi_err(void *conn, void *closure)
 { (void)conn; (void)closure; LOGW("carplay_status: HMI bus error cb (non-fatal)"); }
 
-// TurnByTurnEntitySignal handler. r1 = uint32_t* entityType (deref). DEBUG BUILD:
-// LOGD only — wire hud_on_status(0) clear AFTER a real-drive test confirms the values.
+// TurnByTurnEntitySignal. Runs on the OEM D-Bus worker thread, so no exception
+// may leave it.
 void cp_tbt_entity_cb(void *conn, void *p_entity, void *p_aux, void *userdata)
 {
     (void)conn; (void)p_aux; (void)userdata;
@@ -137,21 +150,19 @@ void cp_tbt_entity_cb(void *conn, void *p_entity, void *p_aux, void *userdata)
         unsigned e = p_entity ? *reinterpret_cast<const uint32_t *>(p_entity) : 0xffffffffu;
         LOGD("carplay TBT entity=%u (%s)",
              e, e == 1 ? "CARPLAY" : e == 2 ? "NATIVE" : e == 0 ? "NONE" : "?");
-        // entityType 1=CARPLAY (CarPlay owns turn-by-turn = nav active). Anything else — 0=NONE
-        // (nav switched off) or 2=NATIVE (the OEM nav took the HUD) — means CarPlay is no longer
-        // doing TBT, so wipe our HUD. Verified live: turning nav off fires entity 1->0. The 6s
-        // staleness timer stays as a backstop for any unit where this subscribe didn't come up.
+        // 1 means CarPlay is giving directions. 0 (navigation ended in the app)
+        // or 2 (the built-in navigation took over) means it no longer is.
         if (e != 1) hud_request_clear();
     } catch (...) { LOGE("cp_tbt_entity_cb exception swallowed (OEM dbus thread)"); }
 }
 
-// SessionDeactiveSignal handler. Multi-field payload (clientId,type,reason,...) — we don't
-// read the fields; arrival = session gone. DEBUG: LOGD only.
+// SessionDeactiveSignal. Its fields (client id, type, reason, ...) are not
+// needed: the signal itself means the session is gone.
 void cp_deactive_cb(void *a0, void *a1, void *a2, void *a3)
 {
     (void)a0; (void)a1; (void)a2; (void)a3;
     LOGD("carplay SessionDeactive (session ended)");
-    hud_request_fullclear();   // CarPlay session gone (e.g. phone unplugged) -> FULL wipe incl sign (like AA teardown)
+    hud_request_fullclear();
 }
 
 void *cp_resolve(const char *name)
@@ -161,14 +172,15 @@ void *cp_resolve(const char *name)
     return p;
 }
 
-// Subscribe to the OEM CarPlay TBT-status signals on the HMI bus. Idempotent; best-effort
-// (any failure just leaves the staleness timer as the fallback — never fatal).
+// Subscribes once to the two signals on the HMI bus. Best effort: if any step
+// fails, guidance still reaches the HUD, but the HUD keeps the last maneuver
+// after navigation ends.
 void carplay_status_start(void)
 {
     if (g_cp_subscribed) return;
-    // The CARPLAY_*Signal_enable stubs live in the CONSUMER lib libjcicarplay_client.so, which
-    // jciCARPLAY (the producer) does not normally load — dlopen it GLOBAL so its JCIDBUS imports
-    // resolve against the already-loaded provider.
+    // The CARPLAY_*Signal_enable functions are in the client library, which
+    // jciCARPLAY (the publisher) does not load itself. Load it RTLD_GLOBAL so
+    // its libjcidbus imports bind to the copy already in the process.
     if (!g_cp_client_lib) {
         g_cp_client_lib = dlopen("libjcicarplay_client.so", RTLD_NOW | RTLD_GLOBAL);
         if (!g_cp_client_lib)
@@ -196,7 +208,7 @@ void carplay_status_start(void)
 
 void arm_navi(const char *from, void *procH, void *devH)
 {
-    // Only run inside the real jciCARPLAY launcher (main.cpp's constructor gate set g_enabled).
+    // g_enabled is set by main.cpp only inside the jciCARPLAY process.
     if (!g_enabled) { LOGW("carplay: not enabled (%s)", from); return; }
     g_armed = 1;
     pthread_mutex_lock(&g_mu);
@@ -205,10 +217,8 @@ void arm_navi(const char *from, void *procH, void *devH)
     if (!g_navi_armed) {
         g_navi_armed = true;
         LOGD("arm_navi from %s: StartNaviRouteGuidence(procH=%p devH=%p 0)", from, procH, devH);
-        // Bring up the HUD sender (D-Bus to com.jci.vbs.navi) so nav_on_devmgr_msg
-        // has somewhere to push decoded maneuvers. Idempotent.
-        hud_send_start();
-        carplay_status_start();   // [NAV-END] subscribe OEM CarPlay TBT-status (debug: LOGD only)
+        hud_send_start();         // the HUD side must be up before maneuvers arrive
+        carplay_status_start();   // to clear the HUD when navigation ends
         if (g_real_startnavi) {
             int rc = g_real_startnavi(procH, devH, (void *)0, (void *)0);
             LOGD("StartNaviRouteGuidence rc=%d; spawning retry+watch", rc);
@@ -220,19 +230,16 @@ void arm_navi(const char *from, void *procH, void *devH)
     pthread_mutex_unlock(&g_mu);
 }
 
-// ---- msgrcv tap (passive) --------------------------------------------------
+// ---- msgrcv hook -----------------------------------------------------------
 typedef long (*pfn_msgrcv)(int, void *, unsigned, long, int);
 pfn_msgrcv      g_real_msgrcv = nullptr;
 
 void msg_tap(int msqid, const void *msgp, long n)
 {
     (void)msqid;
-    // Only big messages: maneuver=0x348, guidance=0x640. Skips chatty small msgs.
+    // The maneuver and guidance messages are the only ones of 0x300 bytes or
+    // more. Nothing from them is written to disk: maneuver text is location data.
     if (n < 0x300 || !msgp) return;
-    // Decode maneuver -> HUD (passive read of the received buffer). The shipped
-    // build does NO disk logging here: the BUILD-2b probe that appended every nav
-    // payload to /data_persist/nav_msgrcv.log + nav_probe_MANEUVER_SEEN.txt was
-    // removed (the user's maneuver text is location data; also avoids flash wear).
     nav_on_devmgr_msg(msgp, n);
 }
 
@@ -245,7 +252,6 @@ long msgrcv(int msqid, void *msgp, unsigned msgsz, long msgtyp, int msgflg)
 {
     if (!g_real_msgrcv) g_real_msgrcv = (pfn_msgrcv)dlsym(RTLD_NEXT, "msgrcv");
     long n = g_real_msgrcv ? g_real_msgrcv(msqid, msgp, msgsz, msgtyp, msgflg) : -1;
-    // Only tap once nav is armed by a live CarPlay session (g_armed set in arm_navi).
     if (g_enabled && g_armed && n > 0) msg_tap(msqid, msgp, n);
     return n;
 }

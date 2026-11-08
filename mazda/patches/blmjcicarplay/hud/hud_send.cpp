@@ -4,37 +4,30 @@
 // licensed under GNU AGPL v3.
 // See NOTICE.md at the repo root for the full attribution.
 //
-// HUD output module — converts the AAP nav events surfaced by nav.cpp
-// into Mazda "Active Driving Display" HUD frames.
+// The HUD sender: turns the maneuvers decoded by nav.cpp into Mazda Active
+// Driving Display frames and sends them to the OEM navigation service,
+// com.jci.vbs.navi, on the service bus.
 //
-// === Transport: OEM libjcidbus (NOT dbus-c++) ================
+// Transport. The frames go through the OEM libraries libjcidbus and
+// libjcivbsnaviclient (see oem/), the same calls the built-in navigation
+// uses, rather than through a D-Bus binding of our own:
+//   * libjcidbus turns off libdbus's exit-on-disconnect, so the service bus
+//     going away (for example when switching between Android Auto and
+//     CarPlay) cannot kill jciCARPLAY.
+//   * libjcidbus runs its own I/O thread, so nothing of ours is left polling
+//     a closed connection.
+//   * All D-Bus setup happens on the sender thread, so arming navigation
+//     never waits for the bus.
 //
-// This module talks to com.jci.vbs.navi through the OEM's own
-// libjcidbus + libjcivbsnaviclient C libraries (see oem/), NOT the
-// vendored dbus-c++ proxies. Reasons (all observed on real cars during
-// this project's own testing):
-//   * libjcidbus disables libdbus exit-on-disconnect, so a private
-//     service-bus teardown (e.g. an AndroidAuto<->CarPlay source
-//     switch) is NON-FATAL — it no longer raises a self-directed
-//     SIGSEGV that kills {L_jciCARPLAY} (= the "đi 1 lúc bị reboot" bug).
-//   * libjcidbus runs its OWN I/O worker thread, so there is no
-//     dispatcher WE own polling a dead socket after a drop (= the
-//     "mất HUD sau 1 lúc" bug) and no use-after-free at teardown.
-//   * All D-Bus bring-up happens on the sender thread, so creating an
-//     AA session never blocks on a synchronous HUD probe.
-// This replaces the previous dbus-c++ path and its hand-rolled
-// reconnect/leak/outer-catch workarounds (the OEM lib handles it).
-//
-// === Producer / consumer ====================================
-//
-// On every 0x500 / 0x501 / 0x502 event nav.cpp pushes via the hud_on_*
-// functions (SDK protobuf-decode thread — MUST NOT block): write the
-// seqlock-protected snapshot, bump g_seq twice, notify the sender cv.
-// The sender thread re-reads the snapshot, diffs vs the previous, and
-// makes the warranted OEM calls (SetHUDDisplayMsgReq for the
-// maneuver/distance block, SetHUD_Display_Msg2 for the road strip).
-// Coalescing (seqlock + "latest wins") means a burst of updates folds
-// into one send.
+// Threads. The hud_on_*() functions are called on the device manager's
+// receive thread and must not block. They write a snapshot protected by a
+// sequence lock (g_seq is odd while a write is in progress) and wake the
+// sender thread. The sender reads the snapshot, compares it with the last
+// one sent, and makes the OEM calls: SetHUDDisplayMsgReq for the turn icon
+// and distance, SetHUD_Display_Msg2 for the road name. Updates that arrive
+// faster than they are sent fold into one; the latest wins. A ticker wakes
+// the sender twice a second to send the current frame again, as the
+// built-in navigation does, so the HUD does not time it out.
 
 #include "../patch.h"
 #include "hud_send.h"
@@ -52,57 +45,32 @@
 #include <cstdlib>
 #include <ctime>
 
-// [2026-06-13 #3] Defined in nav.cpp — flags the nav-side selection/emit state for reset on the
-// next maneuver (msgrcv thread) so the HUD repaints when a route is re-started after a nav-off.
+// Defined in nav.cpp. Called after the HUD is cleared, so that a route started
+// again is shown even if it begins with the same maneuver.
 extern "C" void nav_request_reset(void);
 
 namespace {
 
-// ===== [VN-PATCH] Vietnamese UTF-8 normalization =============================
+// ---- Vietnamese road names --------------------------------------------------
 //
-// Mazda HUD cluster ECU font (baked into HUD firmware) renders:
-//   - 1-byte ASCII                                       ✓
-//   - 2-byte UTF-8 (Latin-1 Supp + Latin Extended-A/B)   ✓ ô ư ơ â ê ă đ á à
-//   - 3-byte UTF-8 (Latin Extended Additional U+1E00..)  ✗ silently DROPPED
-//   - Combining marks (U+0300..U+036F)                   ✗ silently DROPPED
+// The HUD's font (in the HUD's own firmware) draws ASCII and the 2-byte UTF-8
+// range (Latin-1 Supplement, Latin Extended-A and -B), but silently drops
+// 3-byte characters and combining marks. Vietnamese letters with two
+// diacritics, such as ề, ớ and ấ, are 3-byte characters (Latin Extended
+// Additional, U+1E00..U+1EFF), so "về hướng" would show as "v  hư ng".
 //
-// (NFD decomposition test confirmed HUD font lacks combining mark glyphs.)
-//
-// Vietnamese precomposed chars with 2 stacked diacritics (ề = ê + grave,
-// ớ = ơ + acute, ấ = â + acute) live in Latin Extended Additional U+1E00..
-// and are 3-byte UTF-8. The HUD ECU font lacks these so without patch:
-//   CMU :  "về hướng Gia Mô"
-//   HUD :  "v  hư ng Gia Mô"   (ề, ớ silently dropped)
-//
-// Fix: normalize 3-byte VN chars to nearest 2-byte equivalent (NFC-style),
-// dropping the tone mark but preserving circumflex/horn/breve structure:
-//   ề ế ể ễ ệ          -> ê
-//   ấ ầ ẩ ẫ ậ          -> â
-//   ố ồ ổ ỗ ộ          -> ô
-//   ớ ờ ở ỡ ợ          -> ơ
-//   ứ ừ ử ữ ự          -> ư
-//   ắ ằ ẳ ẵ ặ          -> ă
-//   ả ạ                -> a  (no 2-byte composed: fall back to ASCII)
-//   ẻ ẽ ẹ              -> e
-//   ỉ ị                -> i  (Ĩ ĩ are 2-byte, untouched)
-//   ỏ ọ                -> o  (Õ õ are 2-byte, untouched)
-//   ủ ụ                -> u  (Ũ ũ are 2-byte, untouched)
-//   ỳ ỷ ỹ ỵ            -> y  (Ý ý are 2-byte, untouched)
-//
-// 1-byte ASCII and 2-byte UTF-8 pass through unchanged. Result on HUD:
-//   "vê hương Gia Mô"   (structure-preserved Vietnamese, lost tones only)
-//
-// Toggle: 1 = normalize 3-byte -> 2-byte/ASCII  (default — matches HUD font)
-//         0 = pass UTF-8 unchanged             (set if HUD has full VN font)
+// With CARPLAY_VN_NORMALIZE=1 those letters are replaced by the nearest
+// letter the HUD can draw, keeping the circumflex, horn or breve and
+// dropping the tone mark (ề -> ê, ớ -> ơ, ả -> a), so the example shows as
+// "vê hương". Other 3-byte and 4-byte characters become '?'. ASCII and
+// 2-byte characters are not touched. With CARPLAY_VN_NORMALIZE=0 road names
+// are sent unchanged.
 #ifndef CARPLAY_VN_NORMALIZE
 #define CARPLAY_VN_NORMALIZE 1
 #endif
 
-// Map a 3-byte Vietnamese codepoint (U+1E00..U+1EFF) to its best 2-byte
-// or 1-byte equivalent. Returns the replacement codepoint:
-//   - cp >= 0x80   : write as 2-byte UTF-8 (composed Latin char)
-//   - cp <  0x80   : write as 1-byte ASCII
-//   - cp == 0      : no mapping (not a Vietnamese 3-byte char)
+// The replacement for a code point in U+1E00..U+1EFF: a code point below
+// 0x800 (written as 1 or 2 bytes of UTF-8), or 0 if there is none.
 static uint32_t vn_normalize_3byte_cp(uint32_t cp)
 {
     switch (cp) {
@@ -132,15 +100,12 @@ static uint32_t vn_normalize_3byte_cp(uint32_t cp)
     case 0x1EE5: case 0x1EE7:                                       return 'u';        // ụ ủ
     case 0x1EE9: case 0x1EEB: case 0x1EED: case 0x1EEF: case 0x1EF1: return 0x01B0;     // ứ ừ ử ữ ự -> ư
     case 0x1EF3: case 0x1EF5: case 0x1EF7: case 0x1EF9:              return 'y';        // ỳ ỵ ỷ ỹ
-    default:                                                         return 0;          // unhandled — caller drops/skips
+    default:                                                         return 0;
     }
 }
 
-// Normalize UTF-8 src -> dst. 1-byte and 2-byte chars pass through unchanged.
-// 3-byte Vietnamese chars are normalized to their renderable 2-byte/1-byte
-// equivalent (see vn_normalize_3byte_cp). Other 3-byte and 4-byte chars are
-// replaced with '?' so the slot stays visible. Always NUL-terminates dst.
-// Returns bytes written (excluding NUL).
+// Copies UTF-8 src to dst as described above, NUL-terminated. Returns the
+// number of bytes written, not counting the NUL.
 static size_t normalize_vn(const char *src, char *dst, size_t dst_sz)
 {
     if (!dst || dst_sz == 0) return 0;
@@ -156,12 +121,12 @@ static size_t normalize_vn(const char *src, char *dst, size_t dst_sz)
         size_t nb = 1;
 
         if ((c & 0x80) == 0) {
-            // 1-byte ASCII — pass through
+            // ASCII
             dst[di++] = static_cast<char>(c);
             s++;
             continue;
         } else if ((c & 0xE0) == 0xC0 && s[1]) {
-            // 2-byte UTF-8 — pass through (HUD renders these)
+            // 2 bytes: the HUD draws these
             if (di + 2 > max) break;
             dst[di++] = static_cast<char>(c);
             dst[di++] = static_cast<char>(s[1]);
@@ -175,24 +140,21 @@ static size_t normalize_vn(const char *src, char *dst, size_t dst_sz)
                  ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
             nb = 4;
         } else {
-            // Invalid UTF-8 start byte — skip
+            // Not a valid first byte: skip it
             s++;
             continue;
         }
 
-        // 3-byte or 4-byte — try Vietnamese normalization
+        // 3 or 4 bytes
         uint32_t mapped = (nb == 3) ? vn_normalize_3byte_cp(cp) : 0;
         if (mapped < 0x80 && mapped != 0) {
-            // ASCII fallback
             dst[di++] = static_cast<char>(mapped);
         } else if (mapped >= 0x80 && mapped < 0x800) {
-            // 2-byte UTF-8 composed
             if (di + 2 > max) break;
             dst[di++] = static_cast<char>(0xC0 | (mapped >> 6));
             dst[di++] = static_cast<char>(0x80 | (mapped & 0x3F));
         } else {
-            // No Vietnamese mapping (non-VN 3-byte or any 4-byte) — show '?'
-            // so the slot stays visible (HUD would drop the original anyway).
+            // No replacement: '?' at least shows that a character is there.
             dst[di++] = '?';
         }
         s += nb;
@@ -202,23 +164,16 @@ static size_t normalize_vn(const char *src, char *dst, size_t dst_sz)
     return di;
 }
 
-// ===== End VN-PATCH ==========================================================
-
-// Well-known name we acquire on the service bus (libjcidbus registers it
-// via dbus_bus_request_name). A novel name avoids colliding with the real
-// com.jci.vbs.navi service (which we only send method calls to). MUST also
-// differ from the AA shim's name "com.jci.aapa.hud": on a unit where BOTH the
-// AA (jciAAPA) and CarPlay (jciCARPLAY) shims run, the 2nd process to request
-// the SAME well-known name fails dbus_bus_request_name -> JCIDBUS_conn_connect
-// returns 0 -> sender thread exits -> no HUD. So CarPlay uses its own name.
+// The name the sender takes on the service bus. It must differ from
+// com.jci.vbs.navi, the service it calls, and from com.jci.aapa.hud, the name
+// the Android Auto HUD mod uses: if both mods ran under one name, the second
+// to connect would fail and get no HUD.
 constexpr const char *kBusName = "com.jci.carplay.hud";
 
-// === Mazda HUD turn-icon enum =================================
+// ---- HUD icons ---------------------------------------------------------------
 //
-// Mirrors `NaviTurns` in reference hud.h. These are the integer
-// codes the HUD ECU interprets — the OEM glyph atlas is baked
-// into the ECU firmware and is out of our scope. Same numbering
-// as the reference, no remapping.
+// The turn icon codes the HUD understands (NaviTurns in headunit's hud.h).
+// The icons themselves are in the HUD's firmware.
 enum MazdaIcon : uint8_t {
     HUD_STRAIGHT          = 1,
     HUD_LEFT              = 2,
@@ -243,19 +198,11 @@ enum MazdaIcon : uint8_t {
     HUD_FLAG_RIGHT        = 36,
 };
 
-// === Android turn_event → Mazda icon ==========================
-//
-// Lookup: kTurnIcons[android_turn_event][side_index]
-//   side_index: 0=LEFT, 1=RIGHT, 2=UNSPECIFIED/STRAIGHT
-//
-// Indexed by hu.proto NAVTurnMessage.TURN_EVENT (0..19, sparse at
-// 15 and 18). A `0` entry means "no glyph" — the HUD draws blank.
-// ROUNDABOUT_ENTER_AND_EXIT (13) is handled separately by
-// roundabout_icon() because the icon depends on exit angle.
-//
-// This table is copied verbatim from reference hud.cpp's turns[][]
-// (just renamed). The reference table has been validated on real
-// cars; do not "improve" it without a road test.
+// Icon for a turn event and side: kTurnIcons[turn_event][side], side 0 left,
+// 1 right, 2 none. Turn events are the Android Auto NAVTurnMessage values
+// (0..19; 15 and 18 are unused). 0 means no icon. Roundabouts (13) are
+// handled by roundabout_icon(). The table is headunit's turns[][] unchanged;
+// it has been checked on real cars, so change it only after a test drive.
 constexpr uint8_t kTurnIcons[20][3] = {
     /*  0 TURN_UNKNOWN                  */ {0, 0, 0},
     /*  1 TURN_DEPART                   */ {HUD_FLAG_LEFT, HUD_FLAG_RIGHT, HUD_FLAG},
@@ -279,20 +226,16 @@ constexpr uint8_t kTurnIcons[20][3] = {
     /* 19 TURN_DESTINATION              */ {HUD_DESTINATION_LEFT, HUD_DESTINATION_RIGHT, HUD_DESTINATION},
 };
 
-// Roundabout exit icon — 12 directional roundabout glyphs per
-// side, indexed by exit angle (rounded to nearest 30°). Offsets
-// 37 (right-hand traffic) and 49 (left-hand traffic) come from
-// the reference implementation; the HUD ECU has roundabout
-// glyphs at IDs 37..48 and 49..60.
+// Roundabout icon for an exit angle. The HUD has 12 roundabout icons, one per
+// 30 degrees, for right-hand traffic (37..48) and for left-hand traffic
+// (49..60).
 uint8_t roundabout_icon(int32_t degrees, int32_t side_index_lr)
 {
-    // [BUILD-20] Reflect + 180° offset BEFORE bucketing into 12 × 30° sectors.
-    // The Mazda HUD roundabout bank's sector 0 (icon 37/49) points DOWN (6 o'clock =
-    // the entry leg) and its sector index runs COUNTER-clockwise, whereas iAP2
-    // junctionElementExitAngle is 0=straight-ahead, +=right/CW. So feed d = 180 - bearing.
-    // Verified LIVE on the HUD via /tmp/hudtest (RHT bank 37..48): straight(0)->icon43=UP,
-    // right(+90)->icon40=RIGHT, left(270)->icon46=LEFT, behind(180)->icon37=DOWN.
-    // (d+15)/30 rounds to nearest 30°; %12 wraps [345,360) back to sector 0.
+    // The first icon of each set points down (back along the entry road) and
+    // the icons go round anticlockwise, while the exit angle is 0 for straight
+    // on and grows clockwise. So the icon index is (180 - angle), rounded to the
+    // nearest 30 degrees. Checked on the HUD: straight on -> 43 (up),
+    // right -> 40, left -> 46, back -> 37.
     int32_t d = (180 - degrees) % 360;
     if (d < 0) d += 360;
     uint8_t nearest = static_cast<uint8_t>(((d + 15) / 30) % 12);
@@ -300,14 +243,11 @@ uint8_t roundabout_icon(int32_t degrees, int32_t side_index_lr)
     return static_cast<uint8_t>(nearest + offset);
 }
 
-// === Distance-unit enum translation ===========================
-//
-// hu.proto DISPLAY_DISTANCE_UNIT:
-//   1=METERS, 2=KILOMETERS10, 3=KILOMETERS, 4=MILES10,
-//   5=MILES,  6=FEET
-//
-// Mazda HUD (HudDistanceUnit in reference hud.h):
-//   1=METERS, 2=MILES, 3=KILOMETERS, 4=YARDS, 5=FEET
+// HUD distance unit for an Android Auto DISPLAY_DISTANCE_UNIT.
+//   Android Auto: 1 metres, 2 kilometres (tenths), 3 kilometres,
+//                 4 miles (tenths), 5 miles, 6 feet
+//   HUD (HudDistanceUnit in headunit's hud.h): 1 metres, 2 miles,
+//                 3 kilometres, 4 yards, 5 feet
 uint8_t map_distance_unit(uint32_t android_unit)
 {
     switch (android_unit) {
@@ -317,49 +257,44 @@ uint8_t map_distance_unit(uint32_t android_unit)
     case 4: return 2;  // MILES10      -> MILES
     case 5: return 2;  // MILES        -> MILES
     case 6: return 5;  // FEET         -> FEET
-    default: return 0; // Unknown — HUD will render nothing.
+    default: return 0; // unknown: no unit
     }
 }
 
-// === Shared snapshot (seqlock-protected) ======================
+// ---- Shared state -------------------------------------------------------------
+
+// What the HUD should show. Written by the hud_on_*() functions under the
+// sequence lock, read by the sender.
 struct NaviSnapshot {
-    // [VN-PATCH] Buffer 256 to fit long Vietnamese street names (each VN
-    // char with diacritic = 2-3 bytes in UTF-8).
     char     road_name[256];     // NUL-terminated UTF-8
-    uint32_t turn_side;          // proto TURN_SIDE: 1=L, 2=R, 3=U
-    uint32_t turn_event;         // proto TURN_EVENT: 0..19 sparse
+    uint32_t turn_side;          // 1 left, 2 right, 3 none
+    uint32_t turn_event;         // Android Auto turn event, 0..19
     int32_t  turn_angle;         // degrees, signed
     int32_t  turn_number;        // maneuver / exit number
-    int32_t  distance_dec;       // value * 10 (one decimal place)
-    uint8_t  distance_unit;      // ALREADY mapped to Mazda enum
-    int32_t  time_until;         // seconds — ETA to next maneuver
+    int32_t  distance_dec;       // distance * 10, in distance_unit
+    uint8_t  distance_unit;      // HUD distance unit
+    int32_t  time_until;         // seconds to the next maneuver (not shown)
 };
 
 NaviSnapshot            g_snapshot   = {};
 std::atomic<uint32_t>   g_seq{0};
 std::condition_variable g_cv;
 std::mutex              g_cv_mu;
-std::atomic<bool>       g_active{false};        // sender pipeline live (setup done)
-std::atomic<bool>       g_stop{false};          // stop requested
-std::atomic<uint32_t>   g_tick{0};              // keep-alive ticker count; each tick wakes the sender
-std::atomic<bool>       g_have_guidance{false}; // [KEEPALIVE] route active -> re-assert HUD frame each tick
-std::atomic<long>       g_last_nav{0};          // [NAV-END] unix sec of last nav msg; sender clears HUD if stale
-std::atomic<bool>       g_clear_req{false};     // [NAV-END] in-app nav-off (TBT off, CarPlay still connected) -> blank maneuver, KEEP sign
-std::atomic<bool>       g_fullclear_req{false}; // [NAV-END] session gone / phone unplugged (cp_deactive_cb) -> FULL wipe incl sign
+std::atomic<bool>       g_active{false};        // the sender is set up
+std::atomic<bool>       g_stop{false};          // the sender should stop
+std::atomic<uint32_t>   g_tick{0};              // counts keep-alive ticks
+std::atomic<bool>       g_have_guidance{false}; // a route is active: repeat the frame on each tick
+std::atomic<long>       g_last_nav{0};          // time of the last maneuver or distance update
+std::atomic<bool>       g_clear_req{false};     // CarPlay navigation ended: clear the HUD
+std::atomic<bool>       g_fullclear_req{false}; // the CarPlay session ended: clear the HUD
 
-// === OEM connection state =====================================
-//
-// The connection handle is created and owned by the sender thread for
-// its whole lifetime. libjcidbus runs its OWN I/O worker thread, so —
-// unlike the old dbus-c++ path — we run no event loop ourselves and
-// have nothing polling a dead socket after a source switch.
+// The service bus connection. Created, used and freed by the sender thread
+// only.
 void *g_conn = nullptr;
 
-// HUD-present gate, fail-OPEN. Default false (= "not known absent" -> send).
-// A one-shot VBS_NAVI_GetHUDStatus reply flips this true only on a no-HUD
-// car. Fail-open means a lost/late reply never silences us for the drive
-// (replaces the old synchronous probe + background re-probe). The cost is a
-// few harmless frames on a no-HUD car until the reply lands.
+// Set when VBS_NAVI_GetHUDStatus reports that the car has no HUD; frames are
+// then not sent. It starts false, so a lost or late reply never stops the HUD,
+// at the cost of a few unused frames on a car without one.
 std::atomic<bool> g_hud_absent{false};
 
 pthread_t g_sender_thread       = 0;
@@ -367,10 +302,8 @@ bool      g_sender_thread_up    = false;
 pthread_t g_ticker_thread       = 0;
 bool      g_ticker_up           = false;
 
-// libjcidbus connection error callback (stored at conn+0x10 and invoked
-// as cb(conn, closure) on connection-level errors). Must be non-NULL —
-// the library dereferences and calls it. Trivial + non-throwing; with
-// exit-on-disconnect disabled, a bus drop is no longer fatal.
+// libjcidbus calls this as cb(conn, closure) on a connection error. It must
+// not be NULL: the library calls it without checking.
 extern "C" void hud_dbus_error_cb(void *conn, void *closure)
 {
     (void)conn; (void)closure;
@@ -378,8 +311,8 @@ extern "C" void hud_dbus_error_cb(void *conn, void *closure)
          "(non-fatal; exit-on-disconnect is off)");
 }
 
-// VBS_NAVI_GetHUDStatus async reply. ABI from the decompiled trampoline:
-// cb(conn, status_byte, user). A zero status byte means no HUD installed.
+// Reply to VBS_NAVI_GetHUDStatus: cb(conn, status, user). Status 0 means the
+// car has no HUD.
 extern "C" void hud_status_cb(void *conn, unsigned char status, void *user)
 {
     (void)conn; (void)user;
@@ -389,82 +322,54 @@ extern "C" void hud_status_cb(void *conn, unsigned char status, void *user)
          static_cast<unsigned>(status), absent ? "no HUD" : "HUD present");
 }
 
-// Helper: snap vs prev → which OEM HUD calls to make. sender_main owns the
-// prev/sync_bit state and threads them through. Returns false on a send
-// error so the caller can log; the periodic re-assert retries next tick.
+// Sends `cur` if it differs from `prev`, or always when `force` is set (the
+// keep-alive). sync_bit belongs to the sender loop. Returns false if an OEM
+// call failed; the next keep-alive tick tries again.
 bool send_one(const NaviSnapshot &cur,
               const NaviSnapshot &prev,
               uint8_t            &sync_bit,
               bool                force)
 {
-    // HUD reported absent by GetHUDStatus — drain the snapshot but emit
-    // nothing (producers keep updating it regardless).
+    // No HUD in this car.
     if (g_hud_absent.load(std::memory_order_acquire)) return true;
 
-    // Any maneuver-field change (road, turn type/side/number) must still trigger a SEND so the
-    // Msg1 maneuver block (icon/distance) repaints. This is the SEND gate, NOT the re-page gate.
     bool maneuver_changed = (std::strncmp(cur.road_name, prev.road_name,
                                           sizeof(cur.road_name)) != 0) ||
                             cur.turn_event  != prev.turn_event ||
                             cur.turn_side   != prev.turn_side  ||
                             cur.turn_number != prev.turn_number;
-    // [2026-06-13 REAL-DRIVE REVERT of the BUILD-9 road-only sync gate] On a real drive the HUD
-    // LAGGED: when the maneuver changed but the road name stayed the same/blank (consecutive turns,
-    // road-less turns), the road-only sync_bit gate did NOT bump, so the cluster did NOT refresh and
-    // held the OLD maneuver ("map đổi mà HUD không đổi" + arrow shows blank/stale). The sync_bit now
-    // bumps on ANY maneuver change (maneuver_changed) so the cluster re-renders every time the turn
-    // changes. Cost: the minor street re-page "nháy" on a maneuver change returns — but a
-    // correct+prompt maneuver beats a smooth-but-stale one. (Pure distance ticks still don't bump.)
     bool distance_changed = maneuver_changed ||
                             cur.distance_dec  != prev.distance_dec  ||
                             cur.distance_unit != prev.distance_unit ||
                             cur.turn_angle    != prev.turn_angle;
 
-    // [KEEPALIVE] `force` = periodic re-assert (re-send the same frame so the
-    // cluster ECU doesn't age out the maneuver). Skip only if nothing changed
-    // AND this is not a forced re-assert.
     if (!maneuver_changed && !distance_changed && !force)
         return true;  // nothing to send = OK (not a failure)
 
-    // Plain-C OEM wire structs (no dbus-c++ marshalling types).
-    //   VbsNaviHudDisplay (uqyqyy): maneuver icon + distance + speed-limit.
-    //   VbsNaviHudMsg2    (sy):     street-name strip.
-    VbsNaviHudDisplay disp = {};
-    VbsNaviHudMsg2    msg2 = {};
-    std::string       road;   // owns the bytes msg2.guidancePointName points at
+    VbsNaviHudDisplay disp = {};   // turn icon and distance
+    VbsNaviHudMsg2    msg2 = {};   // road name
+    std::string       road;        // holds the text msg2.guidancePointName points at
 
-    // [MIRROR NATIVE — verified by decompile RE of thUpdateGuidanceChangeToHUD]
-    // Native re-sends Msg1 (SetHUDDisplayMsgReq) AND Msg2 (SetHUD_Display_Msg2) as an
-    // INSEPARABLE PAIR, UNCONDITIONALLY, on every guidance push — Msg2 is NEVER gated on
-    // road-name change and is NEVER sent without Msg1. So we COUPLE Msg2 to Msg1: build+send
-    // the street strip on the SAME condition as the maneuver frame (distance_changed ||
-    // splim_changed || force), NOT only on a road-name change. This stops the street strip aging
-    // out on the cluster between turns ("tên đường lúc hiện lúc không") and keeps the whole
-    // TBT alive while driving straight (a distance-only push used to send Msg1 ALONE).
+    // Like the built-in navigation (thUpdateGuidanceChangeToHUD), always send
+    // both messages together, road name included, even when only the distance
+    // changed. A road name sent on its own would fade out on the HUD between
+    // turns.
     if (distance_changed || force) {
-        // sync_bit (cluster refresh hint) bumps on ANY maneuver change (road OR turn type/side/
-        // number) — NOT on distance-only refreshes / keep-alives (those keep the same sync_bit).
-        // This forces the cluster to re-render whenever the turn changes (fixes the real-drive
-        // "HUD didn't update / blank arrow" lag).
+        // A new sync_bit value (cycling 1..7) makes the HUD redraw. It changes
+        // whenever the maneuver changes, even if the road name is the same;
+        // distance updates and keep-alives leave it alone.
         if (maneuver_changed) {
-            // Per reference: bump 1..7 cyclically. The HUD treats a sync_bit
-            // change as a hint to refresh the street-name page.
             sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);
         }
 
 #if CARPLAY_VN_NORMALIZE
-        // [VN-PATCH] Normalize Vietnamese 3-byte UTF-8 to 2-byte equivalents
-        // the HUD font can render. E.g. "về hướng" -> "vê hương".
         char hud_name[sizeof(cur.road_name)];
         normalize_vn(cur.road_name, hud_name, sizeof(hud_name));
         road = hud_name;
 #else
         road = cur.road_name;
 #endif
-        // [VN-PATCH] An EMPTY road-name makes the Mazda HUD cluster ECU render
-        // GARBAGE (uninitialised font memory) in the street slot. VietMap never
-        // populates the AA Step.road field (Step.Builder hard-codes road=null),
-        // so emit a single space -> HUD draws a clean blank slot, not garbage.
+        // An empty road name makes the HUD draw garbage; a space draws nothing.
         if (road.empty()) road = " ";
         msg2.guidancePointName = road.c_str();
         msg2.syncBit           = sync_bit;
@@ -481,8 +386,8 @@ bool send_one(const NaviSnapshot &cur,
             icon = kTurnIcons[cur.turn_event][side_idx];
         }
 
-        // [4.3] never emit unit=0 with a live maneuver. [4.5] clamp distance to
-        // uint16 so a far maneuver (>65535) can't wrap to a tiny value.
+        // Never send unit 0 with a maneuver, and clamp the distance to 16 bits
+        // so a far-away maneuver cannot wrap round to a small number.
         int32_t draw = cur.distance_dec;
         if (draw < 0)      draw = 0;
         if (draw > 0xFFFF) draw = 0xFFFF;
@@ -503,7 +408,7 @@ bool send_one(const NaviSnapshot &cur,
         int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &disp, nullptr, nullptr, nullptr);
         if (rc != 0) { LOGE("hud_send: SetHUDDisplayMsgReq failed rc=%d", rc); return false; }
     }
-    if (distance_changed || force) {   // [MIRROR NATIVE] Msg2 ALWAYS paired with Msg1, every push
+    if (distance_changed || force) {
         LOGV("hud_send: SetHUD_Display_Msg2 road=\"%s\" sync=%u",
              road.c_str(), static_cast<unsigned>(msg2.syncBit));
         int rc = VBS_NAVI_TMC_SetHUD_Display_Msg2(g_conn, &msg2, nullptr, nullptr, nullptr);
@@ -512,26 +417,21 @@ bool send_one(const NaviSnapshot &cur,
     return true;
 }
 
-// [2026-06-13] kNavStaleSec + stale-route auto-clear REMOVED — they wiped the HUD when the nav
-// stream merely PAUSED (stopped at a light) during ACTIVE nav. send_clear() below remains, used
-// only by the one-shot startup-clear (wipe a stale cluster frame at bring-up before any route).
-
-// Push a blank maneuver frame + blank street strip to WIPE the HUD. Used by the stale-route
-// auto-clear and by the fresh-bring-up clear (the cluster ECU keeps the last frame across a
-// cold boot / source switch and we never get a teardown to undo it). Returns false on a send
-// error so the caller can retry next tick. Bumps sync_bit so the cluster re-pages the strip.
+// Sends an empty frame and a blank road name, which clears the HUD. Used at
+// start-up (the HUD keeps the last frame across a restart) and when
+// navigation ends. Returns false if an OEM call failed.
 bool send_clear(uint8_t &sync_bit)
 {
     if (g_conn == nullptr) return false;
     if (g_hud_absent.load(std::memory_order_acquire)) return true;   // no HUD -> nothing to wipe
 
-    VbsNaviHudDisplay disp = {};                 // all-zero -> blank maneuver/distance/splim
+    VbsNaviHudDisplay disp = {};
     int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &disp, nullptr, nullptr, nullptr);
     if (rc != 0) { LOGE("hud_send: clear Msg1 failed rc=%d", rc); return false; }
 
-    sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);   // bump -> cluster re-pages the strip
+    sync_bit = static_cast<uint8_t>((sync_bit % 7) + 1);   // make the HUD redraw
     VbsNaviHudMsg2 msg2 = {};
-    const char *blank = " ";                     // empty -> ECU draws garbage; a space = clean blank
+    const char *blank = " ";                     // see send_one: never an empty string
     msg2.guidancePointName = blank;
     msg2.syncBit           = sync_bit;
     rc = VBS_NAVI_TMC_SetHUD_Display_Msg2(g_conn, &msg2, nullptr, nullptr, nullptr);
@@ -541,10 +441,8 @@ bool send_clear(uint8_t &sync_bit)
     return true;
 }
 
-// Bring up the OEM service-bus connection. Runs ON the sender thread so
-// session start stays cheap. Creates+connects the libjcidbus connection
-// (which disables exit-on-disconnect), starts its worker, fires a one-shot
-// fail-open HUD-presence probe. Returns true once the connection is up.
+// Connects to the service bus, starts libjcidbus's worker thread and asks
+// whether the car has a HUD. Returns true once connected.
 bool sender_setup()
 {
     if (g_stop.load(std::memory_order_relaxed)) return false;
@@ -574,20 +472,17 @@ bool sender_setup()
     return true;
 }
 
-// Clear the HUD and release the OEM connection. Runs on the sender thread as
-// it winds down (it owns the connection). Safe when setup never completed
-// (NULL g_conn skips everything). CLEAN teardown — the thing the old dbus-c++
-// dispatcher never did (it was left polling a dead socket). No leak needed.
+// Clears the HUD and closes the connection. Does nothing if there is none.
 void sender_teardown()
 {
     if (g_conn == nullptr) return;
 
     if (!g_hud_absent.load(std::memory_order_acquire)) {
-        VbsNaviHudDisplay clear = {};   // all fields zero -> blank the HUD
+        VbsNaviHudDisplay clear = {};
         int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &clear, nullptr, nullptr, nullptr);
         if (rc != 0) LOGE("hud sender: clear-frame send failed rc=%d", rc);
         else         LOGD("hud sender: sent HUD clear frame");
-        usleep(50 * 1000);   // let the worker flush the clear before we stop it
+        usleep(50 * 1000);   // let the worker send it before it is stopped
     }
 
     JCIDBUS_worker_stop(g_conn);
@@ -597,15 +492,14 @@ void sender_teardown()
     LOGD("hud sender: worker stopped, connection freed");
 }
 
-// [VN-PATCH] ~2Hz ticker: nudges the sender to re-read /data_persist/splim and
-// re-assert the HUD frame even when the AA snapshot is static. Uses usleep()
-// (libc, relative) + a plain cv notify — deliberately NOT
-// condition_variable::wait_for, whose std::chrono dependency needs
-// GLIBCXX_3.4.19, a libstdc++ symbol the CMU's older libstdc++ lacks.
+// Wakes the sender twice a second for the keep-alive. It sleeps with usleep()
+// rather than using condition_variable::wait_for(), which needs
+// std::chrono::steady_clock from GLIBCXX_3.4.19; the head unit's libstdc++
+// is older.
 void *ticker_main(void *)
 {
     while (!g_stop.load(std::memory_order_relaxed)) {
-        usleep(500 * 1000);   // ~2Hz native cadence
+        usleep(500 * 1000);   // the built-in navigation's rate
         g_tick.fetch_add(1, std::memory_order_relaxed);
         g_cv.notify_one();
     }
@@ -614,7 +508,6 @@ void *ticker_main(void *)
 
 void *sender_main(void *)
 {
-    // All D-Bus bring-up on this thread -> session start is never blocked.
     if (!sender_setup()) {
         sender_teardown();
         LOGD("hud sender: setup did not complete; thread exiting");
@@ -623,7 +516,6 @@ void *sender_main(void *)
     g_active.store(true, std::memory_order_release);
     LOGD("hud sender: HUD plumbing ready (OEM transport)");
 
-    // Start the ~2Hz splim/keep-alive ticker now the pipeline is live.
     if (pthread_create(&g_ticker_thread, nullptr, ticker_main, nullptr) == 0) {
         g_ticker_up = true;
     } else {
@@ -635,19 +527,17 @@ void *sender_main(void *)
     uint32_t     last_processed = 0;
     uint32_t     last_tick = 0;
 
-    // [NAV-END] Fresh bring-up: if no route is active, wipe any maneuver the cluster ECU
-    // retained from a previous session / cold boot (we get no teardown across a power cycle
-    // or a source switch). A live route (intra-process resume) leaves g_have_guidance set,
-    // so this skips and the snapshot paints normally.
+    // Clear whatever the HUD kept from before, unless a route is already
+    // being shown.
     if (!g_have_guidance.load(std::memory_order_relaxed)) {
         if (send_clear(sync_bit))
             LOGD("hud sender: startup HUD clear (no active route)");
     }
 
     while (!g_stop.load(std::memory_order_relaxed)) {
-      try {  // [STABILITY] no exception may escape this thread (std::terminate -> SIGABRT -> reboot)
-        // Seqlock read of g_snapshot. Consistent iff seq is even before AND
-        // after the memcpy AND they match. Retry on tear.
+      try {  // an exception leaving this thread would abort jciCARPLAY
+        // Read the snapshot: the copy is whole if g_seq was even and unchanged
+        // around it; otherwise read again.
         NaviSnapshot snap;
         uint32_t s1, s2;
         for (;;) {
@@ -664,30 +554,15 @@ void *sender_main(void *)
             prev = snap;
             last_processed = s2;
         } else if (g_have_guidance.load(std::memory_order_relaxed)) {
-            // [KEEPALIVE] Ticker woke us with no AA/splim change -> re-assert the
-            // last frame so the cluster ECU doesn't age out the maneuver OR the
-            // speed-limit (native re-asserts ~2Hz). Active when a route is live
-            // (g_have_guidance) OR a posted limit is present (prev_splim != 0).
+            // Woken by the ticker with nothing new: send the last frame again.
             send_one(prev, prev, sync_bit, /*force=*/true);
         }
 
-        // [2026-06-13] The 6s STALE-ROUTE auto-clear stays REMOVED — it wiped the HUD whenever the
-        // nav stream merely PAUSED (stopped at a light) during ACTIVE nav ("đỗ cũng mất").
-        //
-        // The OEM com.jci.carplay TBT-status clear is RESTORED — this is the CORRECT nav-OFF clear
-        // (the regression the user hit: "tắt chỉ đường không mất, rút điện thoại không mất"). The
-        // devmgr_shim cp callbacks set g_clear_req when TurnByTurnEntity != CARPLAY (nav turned off
-        // / native took over) or the CarPlay session deactivates (phone unplugged). It does NOT
-        // fire on a mere stop (entity stays CARPLAY), so it is safe — unlike the staleness. The cb
-        // (HMI worker thread) only sets the flag + wakes us; the wipe happens HERE on the sender
-        // thread (no second writer to the seqlock snapshot).
-        // [NAV-END] Two distinct clear intents from the OEM CarPlay HMI cbs (devmgr_shim):
-        //   g_fullclear_req (cp_deactive_cb = session gone / phone UNPLUGGED) -> wipe EVERYTHING incl
-        //     the speed-limit sign, like the AA mod's session-teardown clear.
-        //   g_clear_req     (cp_tbt_entity_cb = TBT off but CarPlay STILL connected = in-app nav-end)
-        //     -> blank ONLY the maneuver and KEEP the live sign (mirror AA hud_on_status(0): it memsets
-        //     only g_snapshot, never sends limit=0). No all-zero send_clear, no prev_splim reset -> the
-        //     keepalive sustains blank-maneuver+sign with NO flash. Falls back to full clear if no limit.
+        // Clear the HUD when navigation or the CarPlay session ended (see
+        // carplay_status_start in devmgr_shim.cpp). The callbacks only set a
+        // flag; the clear happens here, so the snapshot keeps a single writer.
+        // The HUD is not cleared just because updates pause, as they do while
+        // the car waits at a light.
         bool full_req = g_fullclear_req.exchange(false, std::memory_order_relaxed);
         bool nav_req  = g_clear_req.exchange(false, std::memory_order_relaxed);
         if (full_req) {
@@ -704,17 +579,14 @@ void *sender_main(void *)
                 g_have_guidance.store(false, std::memory_order_relaxed);
                 prev       = {};
                 last_processed = g_seq.load(std::memory_order_acquire);
-                nav_request_reset();   // [#3] so a re-started route re-emits even stationary/same-route
+                nav_request_reset();
             }
         }
 
-        // A send error (rc!=0) is logged inside send_one; we do NOT reconnect.
-        // libjcidbus keeps exit-on-disconnect off (no crash) and the periodic
-        // re-assert above re-sends once the service bus recovers.
+        // A failed send is not retried here and the connection is not
+        // remade: the keep-alive sends again once the bus is back.
 
-        // Predicated wait — wake on stop, an AA snapshot change, or a splim
-        // ticker tick. Plain wait() (no timeout/clock): wait_for would pull
-        // std::chrono::steady_clock::now@GLIBCXX_3.4.19 the CMU lacks.
+        // Sleep until stopped, the snapshot changes, or the ticker ticks.
         last_tick = g_tick.load(std::memory_order_relaxed);
         std::unique_lock<std::mutex> lk(g_cv_mu);
         g_cv.wait(lk, [&]() {
@@ -723,14 +595,12 @@ void *sender_main(void *)
                    g_tick.load(std::memory_order_relaxed) != last_tick;
         });
       } catch (...) {
-        // [STABILITY] Swallow everything: a thrown exception escaping this thread
-        // aborts jciCARPLAY (-> reboot). Log, brief back-off, keep looping.
+        // Log, wait a moment and carry on.
         LOGE("hud: sender loop exception swallowed — continuing (no thread escape)");
         usleep(200 * 1000);
       }
     }
 
-    // Wind down: stop producers from mattering, join the ticker, clear + free.
     g_active.store(false, std::memory_order_release);
     if (g_ticker_up) {
         pthread_join(g_ticker_thread, nullptr);
@@ -742,14 +612,14 @@ void *sender_main(void *)
     return nullptr;
 }
 
-// Seqlock write helpers used by hud_on_* below.
+// Sequence lock around a snapshot write.
 inline void seqlock_begin() { g_seq.fetch_add(1, std::memory_order_acq_rel); }
 inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
                               g_cv.notify_one(); }
 
 } // namespace
 
-// === Lifecycle (called from lifecycle.cpp PLT shims) ==========
+// ---- Lifecycle ----------------------------------------------------------------
 
 void hud_send_start(void)
 {
@@ -757,10 +627,7 @@ void hud_send_start(void)
         LOGD("hud_send_start: already running");
         return;
     }
-    // Keep session start cheap: spawn the sender thread and return
-    // immediately. ALL D-Bus work (connect, HUD-presence probe, bus attach)
-    // happens on that thread (sender_setup). If the HUD is absent the thread
-    // just keeps draining snapshots with sends gated off.
+    // Only starts the thread; it connects to the bus itself.
     g_stop.store(false, std::memory_order_release);
     g_active.store(false, std::memory_order_release);
 
@@ -772,13 +639,13 @@ void hud_send_start(void)
     LOGD("hud_send_start: sender thread spawned (OEM D-Bus setup deferred to thread)");
 }
 
+// Not called at present: the sender runs for the life of the process.
 void hud_send_stop(void)
 {
     if (!g_sender_thread_up) return;
 
-    // Signal stop + wake the sender from its cv wait. The sender thread sends
-    // the HUD clear frame and releases the D-Bus client itself on its way out
-    // (sender_teardown), and joins the ticker — so here we only signal + join.
+    // The sender clears the HUD, closes the connection and stops the ticker
+    // on its way out.
     g_stop.store(true, std::memory_order_release);
     g_have_guidance.store(false, std::memory_order_relaxed);
     g_cv.notify_all();
@@ -790,11 +657,8 @@ void hud_send_stop(void)
     LOGD("hud_send_stop: sender thread stopped, OEM D-Bus released");
 }
 
-// [NAV-END] Request an immediate HUD wipe. Called from the OEM CarPlay TBT-status callback
-// (devmgr_shim cp_*_cb, running on the HMI D-Bus worker thread) when CarPlay nav goes inactive
-// (TurnByTurnEntity != CARPLAY, or session deactivated). Cross-thread safe: it ONLY sets an
-// atomic flag and wakes the sender; the sender does the actual send_clear on its own thread, so
-// there is never a second writer to the seqlock-protected snapshot.
+// Called on the OEM D-Bus worker thread (devmgr_shim.cpp). They only set a
+// flag and wake the sender, which does the clear.
 void hud_request_clear(void)
 {
     g_clear_req.store(true, std::memory_order_relaxed);
@@ -807,21 +671,20 @@ void hud_request_fullclear(void)
     g_cv.notify_one();
 }
 
-// === Producer side (runs on the SDK callback thread) ==========
+// ---- Updates from nav.cpp (device manager receive thread) -------------------
 
 void hud_on_status(uint32_t status)
 {
-    // [RESUME-FIX] Always keep g_snapshot current (no g_active gate) so a
-    // late-starting sender replays the live maneuver on HUD bring-up after a
-    // mid-nav power-cycle.
+    // The snapshot is kept current even before the sender is up, so a
+    // sender that starts mid-route shows the route at once.
     if (status != 1u) {
-        g_have_guidance.store(false, std::memory_order_relaxed);  // [KEEPALIVE] route ended
+        g_have_guidance.store(false, std::memory_order_relaxed);
         seqlock_begin();
         std::memset(&g_snapshot, 0, sizeof(g_snapshot));
         seqlock_end();
     } else {
-        g_have_guidance.store(true, std::memory_order_relaxed);   // [KEEPALIVE] route active
-        g_cv.notify_one();   // wake sender to re-evaluate promptly on route start
+        g_have_guidance.store(true, std::memory_order_relaxed);
+        g_cv.notify_one();
     }
 }
 
@@ -833,8 +696,8 @@ void hud_on_next_turn(const char *road_name,
 {
     seqlock_begin();
     if (road_name) {
-        // [VN-PATCH] Smart UTF-8 truncation: don't cut mid multi-byte sequence
-        // (VN diacritic chars are 2-3 bytes; a mid-sequence cut -> invalid UTF-8).
+        // Truncate a long name at a character boundary, never inside a
+        // multi-byte UTF-8 sequence.
         const size_t max = sizeof(g_snapshot.road_name) - 1;
         size_t n = strnlen(road_name, max + 1);
         if (n > max) {
@@ -854,8 +717,8 @@ void hud_on_next_turn(const char *road_name,
     g_snapshot.turn_angle  = turn_angle;
     g_snapshot.turn_number = turn_number;
     seqlock_end();
-    g_have_guidance.store(true, std::memory_order_relaxed);  // [KEEPALIVE] maneuver live
-    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);  // [NAV-END]
+    g_have_guidance.store(true, std::memory_order_relaxed);
+    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);
 }
 
 void hud_on_distance(int32_t  /*distance_meters*/,
@@ -864,9 +727,9 @@ void hud_on_distance(int32_t  /*distance_meters*/,
                      uint32_t display_distance_unit)
 {
     seqlock_begin();
-    g_snapshot.distance_dec  = display_distance / 100;   // raw*1000 (proto) -> raw*10 (HUD)
+    g_snapshot.distance_dec  = display_distance / 100;   // value * 1000 -> value * 10
     g_snapshot.distance_unit = map_distance_unit(display_distance_unit);
     g_snapshot.time_until    = time_until_seconds;
-    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);  // [NAV-END]
+    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);
     seqlock_end();
 }

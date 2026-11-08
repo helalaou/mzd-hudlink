@@ -5,9 +5,7 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// Self-resolving thunks for libjcidbus connection lifecycle.
-// See libjcidbus.h for the rationale and the hand-derived ABI, and
-// oem_thunk.h for the OEM_THUNK / OEM_THUNK_VOID macros.
+// Thunks for the libjcidbus functions in libjcidbus.h (see oem_thunk.h).
 
 #define LOG_TAG "LIBJCIDBUS"
 #include "../log.h"
@@ -19,11 +17,10 @@
 
 namespace {
 
-// Resolve one libjcidbus symbol by name. libjcidbus is a direct
-// DT_NEEDED of blmjciaapa (always resident), but we still dlopen it
-// once (RTLD_NOW|RTLD_GLOBAL, refcount bump) so resolution is robust
-// regardless of how the process happens to be linked, and fall back
-// to the global scope if the dlopen didn't take.
+// Looks up one libjcidbus function. The library is normally loaded already;
+// opening it here as well means the lookup does not depend on how the
+// process happens to be linked. If the dlopen fails, search the whole
+// process instead.
 void *oem_sym(const char *name)
 {
 	static void *handle = dlopen("libjcidbus.so", RTLD_NOW | RTLD_GLOBAL);

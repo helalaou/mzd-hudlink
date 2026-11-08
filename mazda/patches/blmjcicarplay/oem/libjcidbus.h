@@ -5,27 +5,23 @@
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //
-// libjcidbus connection-lifecycle bindings.
+// libjcidbus: connecting to the head unit's D-Bus buses.
 //
-// This header reads like the vendor header that never shipped: just
-// the prototypes of the OEM C functions we call. There is NO init step
-// and NO global state — each prototype is backed by a self-resolving
-// thunk in libjcidbus.cpp (see oem_thunk.h). Just #include and call;
-// an unresolved symbol degrades to a benign failure return (NULL / 0)
-// instead of crashing.
+// The prototypes of the OEM functions the bridge calls, written as the
+// header Mazda never shipped. Each is backed by a thunk in libjcidbus.cpp
+// (see oem_thunk.h): no set-up is needed, and a function missing from the
+// library returns a failure value (NULL or 0) instead of crashing.
 //
-// Why we use libjcidbus at all (instead of dbus-c++): dbus-c++ leaves
-// libdbus's "exit-on-disconnect" flag at its default (TRUE), so when
-// the private service-bus socket is torn down — e.g. on an Android-
-// Auto <-> CarPlay source switch — libdbus raises a fatal signal and
-// kills the whole {L_jciCARPLAY} process (the self-directed SIGSEGV seen
-// in three crash cores). libjcidbus's own connection setup calls
-// dbus_connection_set_exit_on_disconnect(conn, FALSE) for us and
-// exposes a clean JCIDBUS_worker_stop() teardown.
+// Why libjcidbus rather than a D-Bus binding of our own: libdbus by default
+// exits the process when a connection drops, and the service bus connection
+// does drop, for example when switching between Android Auto and CarPlay.
+// Crash dumps showed exactly that killing jciCARPLAY. libjcidbus turns the
+// behaviour off when it connects (dbus_connection_set_exit_on_disconnect
+// FALSE) and has a clean shutdown in JCIDBUS_worker_stop().
 //
-// All signatures were hand-derived from the Ghidra decompile
-// (decompiled/libjcidbus.so.c) — no header ships for this library.
-// Re-verify after any OEM firmware update.
+// No header exists for this library: the signatures were worked out from a
+// Ghidra decompilation of libjcidbus.so on firmware 74.00.324. Check them
+// again after a firmware update.
 
 #ifndef LIBPATCH_BLMJCICARPLAY_LIBJCIDBUS_H
 #define LIBPATCH_BLMJCICARPLAY_LIBJCIDBUS_H
