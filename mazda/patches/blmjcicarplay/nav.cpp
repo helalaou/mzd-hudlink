@@ -361,7 +361,7 @@ extern "C" void nav_on_devmgr_msg(const void *msgp, long n)
                 // times 1000 in the unit (see hud_on_distance).
                 if (dist < 1000) { unit = 1; disp = dist * 1000; }  // metres
                 else             { unit = 3; disp = dist;        }  // kilometres
-                hud_on_distance(dist, /*time_until*/0, disp, unit);
+                hud_on_distance(disp, unit);
             }
         }
     }

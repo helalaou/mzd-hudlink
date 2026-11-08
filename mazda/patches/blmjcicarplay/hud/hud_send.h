@@ -34,16 +34,11 @@ void hud_on_next_turn(const char *road_name,
                       int32_t     turn_number);
 
 // Distance to the next maneuver.
-//   distance_meters        distance in metres (not used)
-//   time_until_seconds     time to the maneuver (not shown)
 //   display_distance       the distance to show, times 1000, in
 //                          display_distance_unit
 //   display_distance_unit  Android Auto unit: 1 metres, 2 kilometres
 //                          (tenths), 3 kilometres, 4 miles (tenths),
 //                          5 miles, 6 feet
-void hud_on_distance(int32_t  distance_meters,
-                     int32_t  time_until_seconds,
-                     int32_t  display_distance,
-                     uint32_t display_distance_unit);
+void hud_on_distance(int32_t display_distance, uint32_t display_distance_unit);
 
 #endif // LIBPATCH_BLMJCICARPLAY_HUD_SEND_H

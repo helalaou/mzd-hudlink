@@ -41,9 +41,6 @@
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
-#include <cstdio>
-#include <cstdlib>
-#include <ctime>
 
 // Defined in nav.cpp. Called after the HUD is cleared, so that a route started
 // again is shown even if it begins with the same maneuver.
@@ -273,18 +270,15 @@ struct NaviSnapshot {
     int32_t  turn_number;        // maneuver / exit number
     int32_t  distance_dec;       // distance * 10, in distance_unit
     uint8_t  distance_unit;      // HUD distance unit
-    int32_t  time_until;         // seconds to the next maneuver (not shown)
 };
 
 NaviSnapshot            g_snapshot   = {};
 std::atomic<uint32_t>   g_seq{0};
 std::condition_variable g_cv;
 std::mutex              g_cv_mu;
-std::atomic<bool>       g_active{false};        // the sender is set up
 std::atomic<bool>       g_stop{false};          // the sender should stop
 std::atomic<uint32_t>   g_tick{0};              // counts keep-alive ticks
 std::atomic<bool>       g_have_guidance{false}; // a route is active: repeat the frame on each tick
-std::atomic<long>       g_last_nav{0};          // time of the last maneuver or distance update
 std::atomic<bool>       g_clear_req{false};     // CarPlay navigation ended: clear the HUD
 std::atomic<bool>       g_fullclear_req{false}; // the CarPlay session ended: clear the HUD
 
@@ -503,7 +497,6 @@ void *sender_main(void *)
         LOGD("hud sender: setup did not complete; thread exiting");
         return nullptr;
     }
-    g_active.store(true, std::memory_order_release);
     LOGD("hud sender: HUD plumbing ready (OEM transport)");
 
     if (pthread_create(&g_ticker_thread, nullptr, ticker_main, nullptr) == 0) {
@@ -591,7 +584,6 @@ void *sender_main(void *)
       }
     }
 
-    g_active.store(false, std::memory_order_release);
     if (g_ticker_up) {
         pthread_join(g_ticker_thread, nullptr);
         g_ticker_up     = false;
@@ -619,7 +611,6 @@ void hud_send_start(void)
     }
     // Only starts the thread; it connects to the bus itself.
     g_stop.store(false, std::memory_order_release);
-    g_active.store(false, std::memory_order_release);
 
     if (pthread_create(&g_sender_thread, nullptr, sender_main, nullptr) != 0) {
         LOGC("hud_send_start: failed to spawn sender thread");
@@ -643,7 +634,6 @@ void hud_send_stop(void)
     pthread_join(g_sender_thread, nullptr);
     g_sender_thread_up = false;
     g_sender_thread    = 0;
-    g_active.store(false, std::memory_order_release);
     LOGD("hud_send_stop: sender thread stopped, OEM D-Bus released");
 }
 
@@ -708,18 +698,12 @@ void hud_on_next_turn(const char *road_name,
     g_snapshot.turn_number = turn_number;
     seqlock_end();
     g_have_guidance.store(true, std::memory_order_relaxed);
-    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);
 }
 
-void hud_on_distance(int32_t  /*distance_meters*/,
-                     int32_t  time_until_seconds,
-                     int32_t  display_distance,
-                     uint32_t display_distance_unit)
+void hud_on_distance(int32_t display_distance, uint32_t display_distance_unit)
 {
     seqlock_begin();
     g_snapshot.distance_dec  = display_distance / 100;   // value * 1000 -> value * 10
     g_snapshot.distance_unit = map_distance_unit(display_distance_unit);
-    g_snapshot.time_until    = time_until_seconds;
-    g_last_nav.store((long)std::time(nullptr), std::memory_order_relaxed);
     seqlock_end();
 }
