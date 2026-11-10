@@ -357,10 +357,27 @@ extern "C" void nav_on_devmgr_msg(const void *msgp, long n)
             int32_t dist = (int32_t)(*reinterpret_cast<const uint32_t *>(b + kGuidanceDistOff));
             if (dist > 0 && dist <= 100000) {
                 int32_t  disp; uint32_t unit;
-                // Metres below 1 km, kilometres above. disp is the value
-                // times 1000 in the unit (see hud_on_distance).
+                // disp is the value to show times 1000, in `unit` (the
+                // Android Auto units, see hud_on_distance).
+#if HUDLINK_IMPERIAL
+                // Feet, to the nearest 10, below 0.1 mile; miles, to one
+                // decimal place, from there on.
+                if (dist < 161) {
+                    // 1 m = 3.28084 ft
+                    int32_t ft = (int32_t)(((int64_t)dist * 328084 + 500000) / 1000000) * 10;
+                    if (ft < 10) ft = 10;
+                    unit = 6; disp = ft * 1000;                         // feet
+                } else {
+                    // 0.1 mi = 160.9344 m
+                    int32_t tenths = (int32_t)(((int64_t)dist * 10000 + 804672) / 1609344);
+                    if (tenths < 1) tenths = 1;
+                    unit = 5; disp = tenths * 100;                      // miles
+                }
+#else
+                // Metres below 1 km, kilometres from there on.
                 if (dist < 1000) { unit = 1; disp = dist * 1000; }  // metres
                 else             { unit = 3; disp = dist;        }  // kilometres
+#endif
                 hud_on_distance(disp, unit);
             }
         }

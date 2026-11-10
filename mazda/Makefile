@@ -1,33 +1,47 @@
-# Cross-compile Makefile for the CarPlay -> HUD bridge LD_PRELOAD shim.
+# Cross-compiles the CarPlay -> HUD bridge, an LD_PRELOAD library for the
+# jciCARPLAY process on Mazda Connect (CMU150, firmware 74.00.324).
 #
-# Builds patches/blmjcicarplay/*.cpp into:
-#   build/release/libpatch-blmjcicarplay.so   (default: `make` or `make release`)
-#   build/debug/libpatch-blmjcicarplay.so     (`make debug`)
+#   make                 build/release/libpatch-blmjcicarplay.so
+#   make debug           build/debug/...    unoptimised, logs everything
+#   make clean
 #
-# Toolchain: the ARM Cortex-A9 NEON / glibc cross-compiler from lmagder/m3-toolchain
-# (an independent, third-party project). Point M3TOOLCHAIN at a checkout of it:
-#   make M3TOOLCHAIN=/path/to/m3-toolchain
-# The default is ./m3-toolchain next to this Makefile.
+# Options, given on the command line (make UNITS=imperial):
+#   UNITS=metric         distances in metres and kilometres (default)
+#   UNITS=imperial       distances in feet and miles
+#   VIETNAMESE=1         replace the Vietnamese letters the HUD font cannot
+#                        draw (see hud/hud_send.cpp); default 0
+#   M3TOOLCHAIN=<dir>    a checkout of lmagder/m3-toolchain, the ARM
+#                        cross-compiler (an independent, third-party
+#                        project); default ./m3-toolchain
 #
-# The shim has NO licensing / DRM / network code — it is a plain LD_PRELOAD bridge
-# that decodes Apple iAP2 turn-by-turn from the OEM jciCARPLAY process and forwards
-# it to the OEM navigation HUD D-Bus API (com.jci.vbs.navi).
+# The library contains no licensing, DRM or network code. It decodes Apple's
+# turn-by-turn messages inside jciCARPLAY and passes them to the OEM HUD
+# D-Bus service (com.jci.vbs.navi).
 
 M3TOOLCHAIN ?= ./m3-toolchain
-TRIPLE      := arm-cortexa9_neon-linux-gnueabi
-CXX         := $(M3TOOLCHAIN)/bin/$(TRIPLE)-g++
-SYSROOT     := $(M3TOOLCHAIN)/$(TRIPLE)/sysroot
+UNITS       ?= metric
+VIETNAMESE  ?= 0
+
+TRIPLE  := arm-cortexa9_neon-linux-gnueabi
+CXX     := $(M3TOOLCHAIN)/bin/$(TRIPLE)-g++
+SYSROOT := $(M3TOOLCHAIN)/$(TRIPLE)/sysroot
 
 PATCH := blmjcicarplay
 
-# Build-time options (define to taste):
-#   CARPLAY_VN_NORMALIZE  = strip Vietnamese diacritics so road names render on the
-#                              HUD's limited font. Set to 0 / remove for other locales.
-FEATURE_FLAGS := -DCARPLAY_VN_NORMALIZE=1
+ifeq ($(UNITS),imperial)
+  UNIT_FLAGS := -DHUDLINK_IMPERIAL=1
+else ifeq ($(UNITS),metric)
+  UNIT_FLAGS :=
+else
+  $(error UNITS must be metric or imperial, not "$(UNITS)")
+endif
 
-# -D_GLIBCXX_USE_CXX11_ABI=0 selects the pre-C++11 (COW) std::string/std::list ABI:
-# the device ships libstdc++.so.6.0.14 (GCC 4.6 era) which only knows that ABI.
-# -fvisibility=hidden keeps our symbols private; -fPIC is required for a shared object.
+FEATURE_FLAGS := $(UNIT_FLAGS) -DCARPLAY_VN_NORMALIZE=$(VIETNAMESE)
+
+# The flags match what the head unit runs: an ARMv7 Cortex-A9 with NEON, and
+# the libstdc++ of GCC 4.6, which only has the pre-C++11 (copy-on-write)
+# std::string ABI, hence -D_GLIBCXX_USE_CXX11_ABI=0. -fvisibility=hidden keeps
+# everything but the hooks out of the dynamic symbol table.
 COMMON_CXXFLAGS := -std=c++11 \
                    --sysroot=$(SYSROOT) \
                    -march=armv7-a -mtune=cortex-a9 -mfpu=neon \

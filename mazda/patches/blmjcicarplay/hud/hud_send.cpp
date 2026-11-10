@@ -60,8 +60,8 @@ namespace {
 // letter the HUD can draw, keeping the circumflex, horn or breve and
 // dropping the tone mark (ề -> ê, ớ -> ơ, ả -> a), so the example shows as
 // "vê hương". Other 3-byte and 4-byte characters become '?'. ASCII and
-// 2-byte characters are not touched. With CARPLAY_VN_NORMALIZE=0 road names
-// are sent unchanged.
+// 2-byte characters are not touched. The Makefile's VIETNAMESE option sets
+// CARPLAY_VN_NORMALIZE; without it, road names are sent unchanged.
 #ifndef CARPLAY_VN_NORMALIZE
 #define CARPLAY_VN_NORMALIZE 1
 #endif
