@@ -108,8 +108,13 @@ void *navi_retry_thread(void *)
         if (!g_real_startnavi || !g_procH) continue;
         void *p3 = (n & 1) ? (void *)0x5555 : (void *)0;
         int rc = g_real_startnavi(g_procH, g_devH, p3, (void *)0);
-        LOGD("retry#%d StartNaviRouteGuidence(procH=%p devH=%p p3=%p) rc=%d",
-             n, g_procH, g_devH, p3, rc);
+        // Log the first few, then only a changed result and every 60th
+        // (about every 5 minutes), so a long drive does not fill the log.
+        static int last_rc = 0x7fffffff;
+        if (n < 6 || rc != last_rc || (n % 60) == 0)
+            LOGD("retry#%d StartNaviRouteGuidence(procH=%p devH=%p p3=%p) rc=%d",
+                 n, g_procH, g_devH, p3, rc);
+        last_rc = rc;
         n++;
     }
     return nullptr;
