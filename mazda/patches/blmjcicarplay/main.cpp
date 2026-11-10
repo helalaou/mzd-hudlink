@@ -16,6 +16,12 @@
 // check reads /proc/self/cmdline instead. Any other process that inherits
 // LD_PRELOAD keeps g_enabled false, and the hooks in devmgr_shim.cpp then
 // only pass calls through to the real functions.
+//
+// The off switch. If jciCARPLAY ever dies of a fatal signal while the bridge
+// is active, the signal handler writes the crash details to kOffMarker on the
+// persistent partition. From then on the bridge stays inactive at every
+// start, exactly as if it were not installed, so a fault cannot come back on
+// the next drive. Installing the bridge again deletes the file.
 
 #include "patch.h"
 
@@ -34,6 +40,11 @@ std::FILE *g_logf = nullptr;
 
 namespace {
 
+const char kOffMarker[] = "/data_persist/cp-hud-mod/off-after-crash.txt";
+
+// kOffMarker, open while the signal handler writes the crash details.
+int g_off_fd = -1;
+
 pid_t gettid_compat(void)
 {
 #ifdef SYS_gettid
@@ -43,16 +54,26 @@ pid_t gettid_compat(void)
 #endif
 }
 
+// Writes to stderr and, when it is open, to kOffMarker.
+void write_crash(const char *p, size_t n)
+{
+    (void)!write(STDERR_FILENO, p, n);
+    if (g_off_fd >= 0) (void)!write(g_off_fd, p, n);
+}
+
 // On SIGSEGV, SIGBUS, SIGABRT, SIGFPE or SIGILL, writes the signal, the
-// registers, a backtrace and /proc/self/maps to stderr, then re-raises the
-// signal with the default action. The ARM unwinder cannot step past the
-// kernel's signal trampoline, so the registers and the memory map are what
-// locate the fault. Only async-signal-safe calls are used.
+// registers, a backtrace and /proc/self/maps to stderr and to kOffMarker
+// (which switches the bridge off, see above), then re-raises the signal with
+// the default action. The ARM unwinder cannot step past the kernel's signal
+// trampoline, so the registers and the memory map are what locate the fault.
+// Only async-signal-safe calls are used.
 void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 {
+    if (g_off_fd < 0)
+        g_off_fd = open(kOffMarker, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     static const char hdr[] =
         "\n[libpatch-blmjcicarplay][C] *** fatal signal caught ***\n";
-    (void)!write(STDERR_FILENO, hdr, sizeof(hdr) - 1);
+    write_crash(hdr, sizeof(hdr) - 1);
 
     char buf[256];
     int  m = snprintf(buf, sizeof(buf),
@@ -60,7 +81,7 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                  "si_code=%d si_addr=%p\n",
                  sig, (int)getpid(), (int)gettid_compat(),
                  info ? info->si_code : -1, info ? info->si_addr : nullptr);
-    if (m > 0) (void)!write(STDERR_FILENO, buf, (size_t)m);
+    if (m > 0) write_crash(buf, (size_t)m);
 
     if (ucontext) {
         ucontext_t *uc = static_cast<ucontext_t *>(ucontext);
@@ -72,12 +93,13 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                      (unsigned long)mc.arm_sp, (unsigned long)mc.arm_fp,
                      (unsigned long)mc.arm_ip, (unsigned long)mc.arm_cpsr,
                      (unsigned long)mc.fault_address);
-        if (m > 0) (void)!write(STDERR_FILENO, buf, (size_t)m);
+        if (m > 0) write_crash(buf, (size_t)m);
     }
 
     void *frames[64];
     int   n = backtrace(frames, 64);
     backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    if (g_off_fd >= 0) backtrace_symbols_fd(frames, n, g_off_fd);
 
     int mfd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
     if (mfd >= 0) {
@@ -90,9 +112,11 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
                 if (wn <= 0) break;
                 off += wn;
             }
+            if (g_off_fd >= 0) (void)!write(g_off_fd, mbuf, (size_t)rn);
         }
         close(mfd);
     }
+    if (g_off_fd >= 0) { fsync(g_off_fd); close(g_off_fd); g_off_fd = -1; }
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -144,11 +168,15 @@ static void on_load(void)
         // launcher starts. Do nothing.
         return;
     }
-    g_enabled = true;
     // The log file is in /tmp (RAM), appended to across restarts of the
     // process and line-buffered so `tail -f` shows lines as they come.
     g_logf = std::fopen("/tmp/carplay_bridge.log", "a");
     if (g_logf) std::setvbuf(g_logf, nullptr, _IOLBF, 0);
+    if (access(kOffMarker, F_OK) == 0) {
+        LOGE("switched off after a crash (%s), staying inert", kOffMarker);
+        return;
+    }
+    g_enabled = true;
     install_fatal_handler();
     LOGD("=== loaded into jciCARPLAY launcher pid=%d ppid=%d (CarPlay->HUD bridge, FW 74.00.324) ===",
          (int)getpid(), (int)getppid());
