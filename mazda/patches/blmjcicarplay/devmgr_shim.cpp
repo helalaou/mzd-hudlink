@@ -250,6 +250,45 @@ void msg_tap(int msqid, const void *msgp, long n)
 
 } // namespace
 
+#ifdef HUDLINK_DIAG
+// Diagnostic build: which message types reach jciCARPLAY, to tell whether the
+// phone sends route guidance at all. Logs each new (queue, type) pair once,
+// then every 30 seconds the counts that changed. Types and sizes only, never
+// message contents.
+namespace {
+struct DiagEnt { int q; unsigned t; long maxn; unsigned long cnt; unsigned long logged; };
+DiagEnt         g_de[48];
+int             g_den   = 0;
+time_t          g_dlast = 0;
+pthread_mutex_t g_dmu   = PTHREAD_MUTEX_INITIALIZER;
+
+void diag_count(int q, const void *msgp, long n)
+{
+    unsigned t = (n >= 4) ? (unsigned)((*(const uint32_t *)msgp) & 0xffff) : 0xffffu;
+    pthread_mutex_lock(&g_dmu);
+    int i = 0;
+    while (i < g_den && !(g_de[i].q == q && g_de[i].t == t)) i++;
+    if (i == g_den && g_den < 48) {
+        g_de[i].q = q; g_de[i].t = t; g_de[i].maxn = 0; g_de[i].cnt = 0; g_de[i].logged = 0;
+        g_den++;
+        LOGD("diag msg: first q=%d type=0x%04x size=%ld armed=%d", q, t, n, (int)g_armed);
+    }
+    if (i < g_den) { g_de[i].cnt++; if (n > g_de[i].maxn) g_de[i].maxn = n; }
+    time_t now = time(nullptr);
+    if (now - g_dlast >= 30) {
+        g_dlast = now;
+        for (int k = 0; k < g_den; k++) {
+            if (g_de[k].cnt == g_de[k].logged) continue;
+            LOGD("diag msg: q=%d type=0x%04x count=%lu (+%lu) max=%ld armed=%d", g_de[k].q, g_de[k].t,
+                 g_de[k].cnt, g_de[k].cnt - g_de[k].logged, g_de[k].maxn, (int)g_armed);
+            g_de[k].logged = g_de[k].cnt;
+        }
+    }
+    pthread_mutex_unlock(&g_dmu);
+}
+} // namespace
+#endif
+
 #define PRELOAD_EXPORT __attribute__((visibility("default")))
 
 extern "C" PRELOAD_EXPORT
@@ -257,6 +296,9 @@ long msgrcv(int msqid, void *msgp, unsigned msgsz, long msgtyp, int msgflg)
 {
     if (!g_real_msgrcv) g_real_msgrcv = (pfn_msgrcv)dlsym(RTLD_NEXT, "msgrcv");
     long n = g_real_msgrcv ? g_real_msgrcv(msqid, msgp, msgsz, msgtyp, msgflg) : -1;
+#ifdef HUDLINK_DIAG
+    if (g_enabled && n > 0 && msgp) diag_count(msqid, msgp, n);
+#endif
     if (g_enabled && g_armed && n > 0) msg_tap(msqid, msgp, n);
     return n;
 }

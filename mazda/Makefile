@@ -2,6 +2,9 @@
 # jciCARPLAY process on Mazda Connect (CMU150, firmware 74.00.324).
 #
 #   make                 build/release/libpatch-blmjcicarplay.so
+#   make diag            build/diag/...     the release build with a debug log
+#                        on the persistent partition, for finding problems in
+#                        the car (see main.cpp)
 #   make debug           build/debug/...    unoptimised, logs everything
 #   make clean
 #
@@ -55,27 +58,36 @@ COMMON_LDFLAGS  := --sysroot=$(SYSROOT) -shared \
 
 RELEASE_CXXFLAGS := $(COMMON_CXXFLAGS) -O3 -DNDEBUG -ffunction-sections -fdata-sections -flto
 RELEASE_LDFLAGS  := $(COMMON_LDFLAGS) -O3 -flto -Wl,--gc-sections -Wl,-s
+DIAG_CXXFLAGS    := $(RELEASE_CXXFLAGS) -DHUDLINK_DIAG -DLOG_LEVEL=1
+DIAG_LDFLAGS     := $(RELEASE_LDFLAGS)
 DEBUG_CXXFLAGS   := $(COMMON_CXXFLAGS) -O0 -g3 -DDEBUG
 DEBUG_LDFLAGS    := $(COMMON_LDFLAGS)
 
 BUILD_DIR   := build
 RELEASE_DIR := $(BUILD_DIR)/release
+DIAG_DIR    := $(BUILD_DIR)/diag
 DEBUG_DIR   := $(BUILD_DIR)/debug
 
 SRCS         := $(shell find patches/$(PATCH) -name '*.cpp' -type f)
 RELEASE_OBJS := $(patsubst patches/$(PATCH)/%.cpp,$(RELEASE_DIR)/$(PATCH)/%.o,$(SRCS))
+DIAG_OBJS    := $(patsubst patches/$(PATCH)/%.cpp,$(DIAG_DIR)/$(PATCH)/%.o,$(SRCS))
 DEBUG_OBJS   := $(patsubst patches/$(PATCH)/%.cpp,$(DEBUG_DIR)/$(PATCH)/%.o,$(SRCS))
 
-.PHONY: all release debug clean
+.PHONY: all release diag debug clean
 .DEFAULT_GOAL := release
 
-all:     release debug
+all:     release diag debug
 release: $(RELEASE_DIR)/libpatch-$(PATCH).so
+diag:    $(DIAG_DIR)/libpatch-$(PATCH).so
 debug:   $(DEBUG_DIR)/libpatch-$(PATCH).so
 
 $(RELEASE_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) -MD $(RELEASE_CXXFLAGS) -c $< -o $@
+
+$(DIAG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) -MD $(DIAG_CXXFLAGS) -c $< -o $@
 
 $(DEBUG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
 	@mkdir -p $(@D)
@@ -83,6 +95,10 @@ $(DEBUG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
 
 $(RELEASE_DIR)/libpatch-$(PATCH).so: $(RELEASE_OBJS)
 	$(CXX) $^ $(RELEASE_LDFLAGS) -Wl,-soname,libpatch-$(PATCH).so -o $@
+	@echo "built -> $@"
+
+$(DIAG_DIR)/libpatch-$(PATCH).so: $(DIAG_OBJS)
+	$(CXX) $^ $(DIAG_LDFLAGS) -Wl,-soname,libpatch-$(PATCH).so -o $@
 	@echo "built -> $@"
 
 $(DEBUG_DIR)/libpatch-$(PATCH).so: $(DEBUG_OBJS)
@@ -93,4 +109,5 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 -include $(RELEASE_OBJS:.o=.d)
+-include $(DIAG_OBJS:.o=.d)
 -include $(DEBUG_OBJS:.o=.d)

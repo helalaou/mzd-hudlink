@@ -22,6 +22,11 @@
 // persistent partition. From then on the bridge stays inactive at every
 // start, exactly as if it were not installed, so a fault cannot come back on
 // the next drive. Installing the bridge again deletes the file.
+//
+// The diagnostic build (make diag) logs at debug level to kDiagLog on the
+// persistent partition instead of /tmp, one file per start of jciCARPLAY with
+// the two before it kept as kDiagLog1 and kDiagLog2, and starts each file with
+// the process's command line and library search settings.
 
 #include "patch.h"
 
@@ -33,6 +38,7 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/ucontext.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 bool g_enabled = false;
@@ -41,6 +47,11 @@ std::FILE *g_logf = nullptr;
 namespace {
 
 const char kOffMarker[] = "/data_persist/cp-hud-mod/off-after-crash.txt";
+#ifdef HUDLINK_DIAG
+const char kDiagLog[]   = "/data_persist/cp-hud-mod/diag.log";
+const char kDiagLog1[]  = "/data_persist/cp-hud-mod/diag.1.log";
+const char kDiagLog2[]  = "/data_persist/cp-hud-mod/diag.2.log";
+#endif
 
 // kOffMarker, open while the signal handler writes the crash details.
 int g_off_fd = -1;
@@ -168,10 +179,27 @@ static void on_load(void)
         // launcher starts. Do nothing.
         return;
     }
+#ifdef HUDLINK_DIAG
+    (void)std::rename(kDiagLog1, kDiagLog2);
+    (void)std::rename(kDiagLog, kDiagLog1);
+    g_logf = std::fopen(kDiagLog, "w");
+#else
     // The log file is in /tmp (RAM), appended to across restarts of the
-    // process and line-buffered so `tail -f` shows lines as they come.
+    // process.
     g_logf = std::fopen("/tmp/carplay_bridge.log", "a");
+#endif
+    // Line-buffered, so `tail -f` shows lines as they come.
     if (g_logf) std::setvbuf(g_logf, nullptr, _IOLBF, 0);
+#ifdef HUDLINK_DIAG
+    {
+        char cmd[512];
+        read_cmdline(cmd, sizeof(cmd));
+        const char *lp = getenv("LD_LIBRARY_PATH"), *pre = getenv("LD_PRELOAD");
+        LOGD("=== HUDLink diagnostic build loaded, pid=%d, cmdline: %s", (int)getpid(), cmd);
+        LOGD("LD_LIBRARY_PATH=%s", lp ? lp : "(not set)");
+        LOGD("LD_PRELOAD=%s", pre ? pre : "(not set)");
+    }
+#endif
     if (access(kOffMarker, F_OK) == 0) {
         LOGE("switched off after a crash (%s), staying inert", kOffMarker);
         return;

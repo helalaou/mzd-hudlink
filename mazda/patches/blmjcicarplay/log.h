@@ -24,16 +24,25 @@
 // back to stderr before that file is open. The log file is in /tmp, which is
 // RAM, so it stops growing at LOG_MAX_BYTES; it starts empty again when the
 // head unit restarts.
+//
+// The diagnostic build (make diag, HUDLINK_DIAG) instead keeps one log per
+// start of jciCARPLAY on the persistent partition (see main.cpp), with the
+// Unix time at the start of each line.
 
 #ifndef LIBPATCH_BLMJCICARPLAY_LOG_H
 #define LIBPATCH_BLMJCICARPLAY_LOG_H
 
 #include <cstdio>
+#include <ctime>
 
 // The bridge log file. NULL until main.cpp opens it.
 extern std::FILE *g_logf;
 
-#define LOG_MAX_BYTES 262144L   // 256 KB
+#ifdef HUDLINK_DIAG
+#  define LOG_MAX_BYTES 393216L   // 384 KB
+#else
+#  define LOG_MAX_BYTES 262144L   // 256 KB
+#endif
 
 #define LOG_LEVEL_VERBOSE  0
 #define LOG_LEVEL_DEBUG    1
@@ -50,7 +59,18 @@ extern std::FILE *g_logf;
 #  endif
 #endif
 
-#define LOG_EMIT(level, fmt, ...)                                                \
+#ifdef HUDLINK_DIAG
+#  define LOG_EMIT(level, fmt, ...)                                              \
+    do {                                                                         \
+        std::FILE *_lf = g_logf ? g_logf : stderr;                               \
+        if (_lf != g_logf || std::ftell(_lf) < LOG_MAX_BYTES) {                  \
+            std::fprintf(_lf, "%ld [" level "] " fmt "\n",                       \
+                         (long)std::time(nullptr), ##__VA_ARGS__);               \
+            std::fflush(_lf);                                                    \
+        }                                                                        \
+    } while (0)
+#else
+#  define LOG_EMIT(level, fmt, ...)                                              \
     do {                                                                         \
         std::FILE *_lf = g_logf ? g_logf : stderr;                               \
         if (_lf != g_logf || std::ftell(_lf) < LOG_MAX_BYTES) {                  \
@@ -59,6 +79,7 @@ extern std::FILE *g_logf;
             std::fflush(_lf);                                                    \
         }                                                                        \
     } while (0)
+#endif
 
 // A level that is compiled out: `if (false)` keeps the format string and
 // arguments type-checked, and the compiler removes the call at any -O level.
