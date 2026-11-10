@@ -8,7 +8,6 @@
 // Thunks for the libjcivbsnaviclient functions in libjcivbsnaviclient.h
 // (see oem_thunk.h).
 
-#define LOG_TAG "LIBJCIVBSNAVICLIENT"
 #include "../log.h"
 
 #include "libjcivbsnaviclient.h"

@@ -20,10 +20,10 @@
 // type-checked.
 //
 // The process's stderr goes to syslog, which is not kept, so lines are
-// written to the bridge log file (g_logf, opened by main.cpp) and only
-// fall back to stderr before that file is open. A file that defines
-// LOG_TAG before including this header writes to stderr instead, with the
-// tag in each line; the OEM bindings in oem/ do this.
+// written to the bridge log file (g_logf, opened by main.cpp) and only fall
+// back to stderr before that file is open. The log file is in /tmp, which is
+// RAM, so it stops growing at LOG_MAX_BYTES; it starts empty again when the
+// head unit restarts.
 
 #ifndef LIBPATCH_BLMJCICARPLAY_LOG_H
 #define LIBPATCH_BLMJCICARPLAY_LOG_H
@@ -32,6 +32,8 @@
 
 // The bridge log file. NULL until main.cpp opens it.
 extern std::FILE *g_logf;
+
+#define LOG_MAX_BYTES 262144L   // 256 KB
 
 #define LOG_LEVEL_VERBOSE  0
 #define LOG_LEVEL_DEBUG    1
@@ -48,23 +50,15 @@ extern std::FILE *g_logf;
 #  endif
 #endif
 
-#ifdef LOG_TAG
-#  define LOG_EMIT(level, fmt, ...)                                              \
-    do {                                                                         \
-        std::fprintf(stderr,                                                     \
-                     "[libpatch-blmjcicarplay][" LOG_TAG "][" level "] " fmt "\n", \
-                     ##__VA_ARGS__);                                             \
-        std::fflush(stderr);                                                     \
-    } while (0)
-#else
-#  define LOG_EMIT(level, fmt, ...)                                              \
+#define LOG_EMIT(level, fmt, ...)                                                \
     do {                                                                         \
         std::FILE *_lf = g_logf ? g_logf : stderr;                               \
-        std::fprintf(_lf, "[libpatch-blmjcicarplay][" level "] " fmt "\n",       \
-                     ##__VA_ARGS__);                                             \
-        std::fflush(_lf);                                                        \
+        if (_lf != g_logf || std::ftell(_lf) < LOG_MAX_BYTES) {                  \
+            std::fprintf(_lf, "[libpatch-blmjcicarplay][" level "] " fmt "\n",   \
+                         ##__VA_ARGS__);                                         \
+            std::fflush(_lf);                                                    \
+        }                                                                        \
     } while (0)
-#endif
 
 // A level that is compiled out: `if (false)` keeps the format string and
 // arguments type-checked, and the compiler removes the call at any -O level.

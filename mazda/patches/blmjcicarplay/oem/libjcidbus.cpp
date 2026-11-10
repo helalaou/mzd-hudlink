@@ -7,7 +7,6 @@
 //
 // Thunks for the libjcidbus functions in libjcidbus.h (see oem_thunk.h).
 
-#define LOG_TAG "LIBJCIDBUS"
 #include "../log.h"
 
 #include "libjcidbus.h"
