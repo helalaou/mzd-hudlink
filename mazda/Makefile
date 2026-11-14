@@ -82,7 +82,7 @@ RELEASE_OBJS := $(patsubst patches/$(PATCH)/%.cpp,$(RELEASE_DIR)/$(PATCH)/%.o,$(
 DIAG_OBJS    := $(patsubst patches/$(PATCH)/%.cpp,$(DIAG_DIR)/$(PATCH)/%.o,$(SRCS))
 DEBUG_OBJS   := $(patsubst patches/$(PATCH)/%.cpp,$(DEBUG_DIR)/$(PATCH)/%.o,$(SRCS))
 
-.PHONY: all release diag debug clean
+.PHONY: all release diag debug clean FORCE
 .DEFAULT_GOAL := release
 
 all:     release diag debug
@@ -90,15 +90,22 @@ release: $(RELEASE_DIR)/libpatch-$(PATCH).so
 diag:    $(DIAG_DIR)/libpatch-$(PATCH).so
 debug:   $(DEBUG_DIR)/libpatch-$(PATCH).so
 
-$(RELEASE_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
+# Each build directory keeps the options it was last built with in a file
+# that is rewritten only when they change, so changing UNITS or VIETNAMESE
+# rebuilds the objects without a "make clean".
+$(RELEASE_DIR)/options $(DIAG_DIR)/options $(DEBUG_DIR)/options: FORCE
+	@mkdir -p $(@D)
+	@echo '$(FEATURE_FLAGS)' | cmp -s - $@ || echo '$(FEATURE_FLAGS)' > $@
+
+$(RELEASE_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp $(RELEASE_DIR)/options
 	@mkdir -p $(@D)
 	$(CXX) -MD $(RELEASE_CXXFLAGS) -c $< -o $@
 
-$(DIAG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
+$(DIAG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp $(DIAG_DIR)/options
 	@mkdir -p $(@D)
 	$(CXX) -MD $(DIAG_CXXFLAGS) -c $< -o $@
 
-$(DEBUG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp
+$(DEBUG_DIR)/$(PATCH)/%.o: patches/$(PATCH)/%.cpp $(DEBUG_DIR)/options
 	@mkdir -p $(@D)
 	$(CXX) -MD $(DEBUG_CXXFLAGS) -c $< -o $@
 
