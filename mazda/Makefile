@@ -68,7 +68,16 @@ RELEASE_DIR := $(BUILD_DIR)/release
 DIAG_DIR    := $(BUILD_DIR)/diag
 DEBUG_DIR   := $(BUILD_DIR)/debug
 
-SRCS         := $(shell find patches/$(PATCH) -name '*.cpp' -type f)
+# The sources, in the order the tested builds link them. The link order
+# shapes the library, so a fixed list (rather than a directory listing, whose
+# order depends on the file system) gives the same bytes on every machine.
+SRCS         := $(addprefix patches/$(PATCH)/, \
+                  nav.cpp \
+                  hud/hud_send.cpp \
+                  main.cpp \
+                  oem/libjcivbsnaviclient.cpp \
+                  oem/libjcidbus.cpp \
+                  devmgr_shim.cpp)
 RELEASE_OBJS := $(patsubst patches/$(PATCH)/%.cpp,$(RELEASE_DIR)/$(PATCH)/%.o,$(SRCS))
 DIAG_OBJS    := $(patsubst patches/$(PATCH)/%.cpp,$(DIAG_DIR)/$(PATCH)/%.o,$(SRCS))
 DEBUG_OBJS   := $(patsubst patches/$(PATCH)/%.cpp,$(DEBUG_DIR)/$(PATCH)/%.o,$(SRCS))
