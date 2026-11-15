@@ -13,3 +13,6 @@ mazda/m3-toolchain
 *.swp
 .DS_Store
 Thumbs.db
+
+# USB files assembled by tools/make-usb.sh
+dist/
