@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test fixture in the shape of /etc/devmgr_config_master.xml. -->
+<DevMgrConfig>
+    <param><name>CarPlaySupported</name><value>TRUE</value></param>
+    <param><name>NaviSupported</name><value>FALSE</value></param>
+    <param><name>LocationSupported</name><value>FALSE</value></param>
+</DevMgrConfig>
