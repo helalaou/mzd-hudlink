@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// CarPlay -> HUD bridge for Mazda Connect (CMU150).
-// Copyright (C) 2026 KID MIXER-MODER.
+// HUDLink: CarPlay directions on the Mazda Connect (CMU150) HUD.
+// Copyright (C) 2026 KID MIXER-MODER (the original CarPlay -> HUD bridge).
+// Copyright (C) 2026 The HUDLink authors (changes since; see AUTHORS).
 //
 // Part of an AGPL-3.0 work - see NOTICE.md for full attribution.
 //

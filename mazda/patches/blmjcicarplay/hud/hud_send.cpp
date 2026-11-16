@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
+// HUDLink: CarPlay directions on the Mazda Connect (CMU150) HUD.
 // Adapted from headunit (https://github.com/Trevelopment/headunit),
-// licensed under GNU AGPL v3.
+// licensed under GNU AGPL v3, by KID MIXER-MODER (2026), and changed since
+// by the HUDLink authors (see AUTHORS).
 // See NOTICE.md at the repo root for the full attribution.
 //
 // The HUD sender: turns the maneuvers decoded by nav.cpp into Mazda Active
