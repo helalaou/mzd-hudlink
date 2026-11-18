@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # HUDLink USB launcher.
 #
 # Started by the USB drive's run.sh. Offers each step below in turn with

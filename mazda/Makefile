@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 KID MIXER-MODER (the original build).
+# Copyright (C) 2026 The HUDLink authors (changes since; see AUTHORS).
+#
 # Cross-compiles the CarPlay -> HUD bridge, an LD_PRELOAD library for the
 # jciCARPLAY process on Mazda Connect (CMU150, firmware 74.00.324).
 #

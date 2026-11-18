@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # Tests of the USB scripts (usb/) on a fake head unit.
 #
 #   tests/run.sh [--factory DIR]

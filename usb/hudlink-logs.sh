@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # HUDLink: save logs.
 #
 # Copies to the USB drive (logs/check-<date>-<time>/) what is needed to see

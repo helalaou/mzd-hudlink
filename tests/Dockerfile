@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # Test environment for the USB scripts.
 #
 # Debian with BusyBox, the shell and tools the head unit's scripts run with,

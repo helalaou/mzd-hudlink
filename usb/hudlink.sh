@@ -1,4 +1,7 @@
 #!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # HUDLink installer for Mazda Connect CMU150, firmware 74.00.324.
 #
 # Installs or uninstalls the HUDLink bridge, which shows CarPlay turn-by-turn

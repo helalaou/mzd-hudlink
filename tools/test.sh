@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # Runs the USB scripts' tests (tests/run.sh) in the test container
 # (tests/Dockerfile).
 #

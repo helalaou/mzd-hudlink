@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The HUDLink authors (see AUTHORS).
+#
 # Assembles the files HUDLink adds to a USB drive.
 #
 #   tools/make-usb.sh --units metric|imperial [--diag] [--so FILE] [--out DIR]
