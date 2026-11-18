@@ -1,33 +1,58 @@
-# NOTICE — attribution & copyleft summary
+# Notice
 
-This is an unofficial, community-developed modification. It is **not affiliated with,
-endorsed by, or supported by Mazda Motor Corporation or Apple Inc.** "Mazda", "Mazda
-Connect", "CarPlay" and related marks belong to their respective owners.
-
-## Copyright (original work)
-**Copyright (C) 2026 KID MIXER-MODER** — all source in this repository **except** the
-headunit-derived files listed under "Derived code" below. This includes:
-- the passive libc `msgrcv` tap of the iAP2 message queue (`devmgr_shim.cpp`),
-- the Apple iAP2 `maneuverType` decode + route-window maneuver selection (`nav.cpp`),
-- the `jciCARPLAY` process gate and devmgr PLT interposition (`main.cpp`, `devmgr_shim.cpp`),
-- the OEM `libjcidbus` / VBS_NAVI HUD transport (`oem/`, `patch.h`, `log.h`) — its signatures
-  were hand-derived by reverse-engineering the OEM libraries with Ghidra,
-- the cross-compile `Makefile`, the install scripts (`install/`), and the documentation (`docs/`).
-
-## Derived code (AGPL-3.0 — the reason this work is AGPL-3.0)
-- **headunit (Trevelopment / Bryan Adams et al.)** — <https://github.com/Trevelopment/headunit>.
-  The HUD guidance sender (`mazda/patches/blmjcicarplay/hud/hud_send.cpp` and `hud_send.h`) is
-  adapted from it, and the cross-compile build pattern follows it. (An earlier copy of its
-  vendored CMU D-Bus proxies, `mazda/dbus/`, was unused and has been removed.) Those files carry `SPDX-License-Identifier:
-  AGPL-3.0-or-later` headers referencing the original. This is the only third-party code reused
-  here.
-
-## Build dependency (third-party, not part of this work)
-- **m3-toolchain** — <https://github.com/lmagder/m3-toolchain> (lmagder) — an independent ARM
-  cross-compiler with its own license, referenced via `.gitmodules` (not vendored here).
+HUDLink is an unofficial modification for Mazda Connect head units. It isn't
+affiliated with, endorsed by or supported by Mazda Motor Corporation, Apple Inc.
+or Google LLC. Mazda, Mazda Connect, CarPlay, Apple Maps and Google Maps are
+trademarks of their respective owners.
 
 ## License
-The whole work is distributed under the **GNU Affero General Public License v3.0** (see
-`LICENSE`). AGPL-3.0 is copyleft: derivatives must keep the license and make their source
-available to users (including users interacting over a network). It is **required** here
-because the work incorporates AGPL code from headunit (above) — not chosen freely.
+
+The whole project is licensed under the GNU Affero General Public License v3.0
+or later (see [LICENSE](LICENSE)). Every source file states its license in an
+`SPDX-License-Identifier` line. The AGPL comes from the code HUDLink is built
+on (listed below), so it can't be swapped for a more permissive license.
+
+## Copyright
+
+**Copyright (C) 2026 KID MIXER-MODER** for the original CarPlay-to-HUD bridge,
+[mazda-carplay-hud](https://github.com/KidMixer/mazda-carplay-hud), which
+HUDLink was forked from at commit `9782e92`. This covers the bridge's design
+and the code in `mazda/` as it was at that commit:
+
+- the `jciCARPLAY` process check and the device manager hooks (`main.cpp`,
+  `devmgr_shim.cpp`);
+- decoding Apple's route guidance messages and choosing which maneuver to show
+  (`nav.cpp`);
+- sending to the HUD through the head unit's own `libjcidbus` and
+  `libjcivbsnaviclient`, whose interfaces were worked out by reverse
+  engineering (`oem/`, `patch.h`, `log.h`);
+- the cross-compile `Makefile`.
+
+**Copyright (C) 2026 The HUDLink authors** (see [AUTHORS](AUTHORS)) for
+everything changed in those files since commit `9782e92`, and for everything
+added since: the USB scripts (`usb/`), the build and test tools (`tools/`,
+`tests/`) and the documentation.
+
+## Adapted code
+
+- **headunit** by Trevelopment and the headunit contributors,
+  <https://github.com/Trevelopment/headunit>, AGPL-3.0. The HUD sender
+  (`mazda/patches/blmjcicarplay/hud/hud_send.cpp` and `hud_send.h`) is adapted
+  from headunit's HUD code, and the cross-compile setup follows headunit's
+  approach. Apart from the original bridge, this is the only outside code in
+  HUDLink, and it's the reason the bridge, and so HUDLink, is AGPL-3.0.
+
+## Not included
+
+- **m3-toolchain** by lmagder, <https://github.com/lmagder/m3-toolchain>: the
+  ARM cross-compiler. The build container (`tools/Dockerfile`) downloads it at
+  a pinned commit, but none of it is stored in this repository.
+- **mzd-v74-tweaks** by piotrmocko,
+  <https://github.com/piotrmocko/mzd-v74-tweaks>, CC BY-NC-SA 4.0: its release
+  sets up the USB drive that starts HUDLink. None of its files are in this
+  repository, and HUDLink's USB scripts were written from scratch for this
+  project.
+- **Mazda's files.** HUDLink doesn't ship any file from the head unit. The
+  installer edits the head unit's own files in place, and the test fixtures in
+  `tests/fixtures/` are small stand-ins shaped like the real files, written for
+  the tests.
