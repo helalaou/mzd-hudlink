@@ -1,93 +1,373 @@
-# CarPlay → HUD bridge for Mazda Connect (CMU150)
+# HUDLink
 
-`LD_PRELOAD` shims for the Mazda CMU infotainment system that put **Apple CarPlay
-turn-by-turn navigation on the instrument-cluster Head-Up Display (HUD)** — the way the
-community Android-Auto HUD mods bring Android Auto guidance to the same display.
+**Your CarPlay directions, on your Mazda's head-up display.** HUDLink bridges
+Apple CarPlay, wired or wireless, to the factory head-up display of
+first-generation Mazda Connect cars. Apple Maps and Google Maps directions show
+up on the HUD just like the built-in SD-card navigation's, and the HUD's speed
+and traffic sign display keeps working.
 
-By **KID MIXER-MODER**. The HUD guidance sender is adapted from
-[Trevelopment/headunit](https://github.com/Trevelopment/headunit) (AGPL-3.0, which is why this
-is too); everything else — the iAP2 decode, the OEM transport (reverse-engineered with Ghidra),
-the build files — is original to this project.
+## Why it exists
 
-Stock Mazda Connect renders Android Auto and native navigation on the HUD but **never
-CarPlay** (CarPlay is only screen-mirrored). This bridge decodes the Apple iAP2
-turn-by-turn stream inside the OEM `jciCARPLAY` process and forwards each maneuver —
-arrow, distance, road name — to the OEM navigation HUD D-Bus API.
+On cars with the first-generation Mazda Connect head unit (CMU150), the head-up
+display (Mazda calls it the Active Driving Display) only shows directions from
+the built-in SD-card navigation. CarPlay directions never make it there, and
+Mazda never added support for them on these cars.
 
-- **HUD navigation only** — maneuver + distance + road name (no posted speed-limit sign).
-- **No licensing / DRM / network** code — just the bridge.
-- Supported: Mazda Connect **CMU150**, FW **74.00.324** (CX-5 KF, CX-8 2018 and
-  same-platform units); wired and wireless CarPlay (WCP).
+HUDLink fills that gap. Once it's installed, the HUD shows live turn-by-turn
+directions from Apple Maps or Google Maps, whether your iPhone is plugged in or
+connected wirelessly. CarPlay itself keeps running on the center screen as
+usual.
 
-## Repository layout
+There's nothing to install on your phone, and no internet connection is needed.
+HUDLink simply reads the route guidance your iPhone already sends to the car.
+
+## Works just like the built-in navigation
+
+HUDLink drives the HUD through the same head unit calls the built-in SD-card
+navigation uses, so CarPlay directions look and behave like the factory ones:
+
+- **Real-time turn-by-turn.** The distance to the next turn counts down live as
+  you drive, and the HUD follows along whenever the route is recalculated.
+- **The full set of turn icons:** left and right turns, sharp and slight turns,
+  forks and keep left/right, highway changes, on and off ramps, U-turns,
+  roundabouts with the exit you need to take, ferries, and your destination.
+- **Road names** for the road you're turning onto.
+- **Speed and traffic signs still work.** The HUD's own speed readout and
+  traffic sign display keep running next to the directions, exactly as they do
+  with the built-in navigation.
+- **Wired or wireless CarPlay.** The bridge runs inside the head unit's own
+  CarPlay process, so it doesn't matter how your iPhone is connected: with a
+  cable, or through a wireless adapter with smartBox firmware.
+- **Clean handover.** The directions clear when the route ends or CarPlay
+  disconnects, and the built-in SD-card navigation keeps working as before.
+
+## What we did
+
+HUDLink is a fork of
+[mazda-carplay-hud](https://github.com/KidMixer/mazda-carplay-hud) (AGPL-3.0).
+Here's what we changed to get it working in our car and make it something we
+trust on the road:
+
+- **We got it working in our car over wireless CarPlay.** We built a diagnostic
+  version that logs what happens inside the head unit, found out why the HUD
+  stayed blank, and kept testing until Apple Maps and Google Maps directions
+  showed up properly on the road.
+- **We rewrote the installer from scratch.** The new one tests the bridge on
+  your head unit before it changes anything, only touches what it needs to,
+  and puts every file back byte for byte when you uninstall.
+- **We cleaned up and improved the bridge.** Every source file was reworked.
+  Dead code is gone, the structure is clearer, the comments match the code, and
+  the bridge is about 350 lines shorter than before. We also added feet and
+  miles, an off switch that disables the bridge after a crash, and leaner
+  logging.
+- **We added proper tooling:** reproducible builds in a pinned container, a
+  script that packages the USB drive, and tests that run the installer on a
+  fake head unit.
+
+The full list is under [What changed from the original](#what-changed-from-the-original).
+
+## Tested
+
+| | |
+|---|---|
+| Head unit | Mazda Connect CMU150, firmware 74.00.324A, North America |
+| CarPlay | Wireless, through a third-party hub with smartBox firmware (Carabc "smartbox bfcf") |
+| Apps | Apple Maps and Google Maps |
+| On the HUD | Turn arrows, distance to the turn and road names, alongside the HUD's own speed and traffic sign display, all exactly as they should be |
+
+So far that's one car, driven with wireless CarPlay. Wired CarPlay reaches the
+bridge through exactly the same path inside the head unit. Other cars on
+firmware 74.00.324 should behave the same way, and the installer checks each
+head unit before it touches anything.
+
+## How to run it
+
+### What you need
+
+- A Mazda with the first-generation Mazda Connect head unit (CMU150) on
+  firmware 74.00.324, and a head-up display. You can check the firmware under
+  Settings > System > About > Version Information.
+- An iPhone with CarPlay, connected by cable or through a wireless adapter with
+  smartBox firmware (see [Known issues](#known-issues)).
+- A computer with git and Docker: Docker Engine on Linux, or
+  [Colima](https://github.com/abiosoft/colima) or Docker Desktop on macOS.
+- A USB drive formatted as FAT32, 32 GB or smaller.
+- If you installed the original mazda-carplay-hud, uninstall it first with its
+  own uninstaller.
+
+### 1. Build the USB files
+
+Start Docker (with Colima, run `colima start`), then run this in a terminal at
+the root of this repository:
+
+```bash
+tools/make-usb.sh --units imperial
 ```
-mazda/
-  Makefile                       cross-compile rules (m3-toolchain)
-  m3-toolchain/                  ARM cross-compiler (git submodule)
-  patches/blmjcicarplay/
-    main.cpp                     LD_PRELOAD entry + jciCARPLAY process gate + crash handler
-    devmgr_shim.cpp              devmgr PLT shims + passive msgrcv iAP2 tap
-    nav.cpp                      iAP2 maneuver decode + route-window selection
-    hud/hud_send.cpp, hud_send.h HUD D-Bus sender (com.jci.vbs.navi)   [derived from headunit]
-    oem/                         OEM transport glue (libjcidbus, VBS_NAVI client)
-    patch.h, log.h               shared helpers
-install/                         install.sh / uninstall.sh / run.sh / INSTALL.md
-docs/how-it-works.md             data path + maneuverType catalogue
-```
 
-## Building from source
-```sh
-git clone --recursive <this-repo>
-# or, if cloned without --recursive:
-git submodule update --init --recursive
+Use `--units metric` instead for meters and kilometers. The first run sets up
+the build container and downloads the ARM cross-compiler, so it takes a while;
+later runs are much faster. Everything ends up in `dist/usb/`.
 
-cd mazda
-make            # -> build/release/libpatch-blmjcicarplay.so
-make debug      # unstripped; logs to /tmp/carplay_bridge.log
-make clean
-```
-The default `make` produces the navigation-only HUD shim. Build options live in the
-`Makefile` (`FEATURE_FLAGS`): `CARPLAY_NO_SPLIM` (on) and `CARPLAY_VN_NORMALIZE`
-(strip Vietnamese diacritics for the HUD font — set to 0 for other locales).
+### 2. Set up the USB drive
 
-## Install
-Copy the built `libpatch-blmjcicarplay.so` next to the install scripts and run them on
-the unit — see [`install/INSTALL.md`](install/INSTALL.md). The installer `LD_PRELOAD`s the
-shim into `jciCARPLAY` (sm_WCP.conf on wireless units, sm.conf otherwise), sets
-`NaviSupported=TRUE`, and backs up every edited file. Reversible; it cannot brick the unit
-(read-only relfs — worst case a reboot returns it to stock).
+1. Download `mzd-v74-tweaks-1.0.1.zip` from the
+   [mzd-v74-tweaks releases](https://github.com/piotrmocko/mzd-v74-tweaks/releases)
+   and unzip it to the root of the drive. It provides the file that makes the
+   head unit run the drive's `run.sh`.
+2. Copy everything from `dist/usb/` to the root of the drive, replacing
+   `launcher.sh` and `launcher.sh.md5`.
+3. On a Mac, delete the hidden `._` files macOS leaves on FAT32 drives (replace
+   `MYDRIVE` with your drive's name):
 
-## Toolchain notes
-The cross-compiler is the [`m3-toolchain`](https://github.com/lmagder/m3-toolchain)
-submodule — an independent, third-party ARM cross-compiler (triple
-`arm-cortexa9_neon-linux-gnueabi`). Build flags match the device's runtime: `-march=armv7-a -mtune=cortex-a9 -mfpu=neon`
-and `-D_GLIBCXX_USE_CXX11_ABI=0` (the CMU ships the GCC-4.6-era libstdc++ COW std::string
-ABI). The shim links no `dbus-c++`: it talks to the HUD through the OEM `libjcidbus` transport.
+   ```bash
+   find /Volumes/MYDRIVE -name '._*' -delete
+   ```
 
-## License & attribution
-Licensed under the **GNU Affero General Public License v3.0** — see [`LICENSE`](LICENSE)
-and [`NOTICE.md`](NOTICE.md). AGPL-3.0 is inherited from the upstream projects (copyleft).
+   A leftover `._` copy of the trigger file can make the head unit start the
+   drive twice.
 
-- **All code in this repo** — the CarPlay iAP2 decode, the `jciCARPLAY` interposition, the OEM
-  `libjcidbus`/VBS_NAVI transport (reverse-engineered from the OEM libraries with Ghidra), the
-  **`Makefile`**, the install scripts and docs — © 2026 **KID MIXER-MODER**, except the derived
-  code below.
-- **Derived code (AGPL-3.0)** — the HUD guidance sender (`hud/hud_send.*`) is adapted from
-  [Trevelopment/headunit](https://github.com/Trevelopment/headunit). This is the only reused
-  code, and the reason the whole work is AGPL-3.0.
-- **`m3-toolchain`** — the ARM cross-compiler is an independent third-party submodule
-  ([lmagder/m3-toolchain](https://github.com/lmagder/m3-toolchain), its own license), not part of this work.
+### 3. Install in the car
 
-Per-file `SPDX-License-Identifier` headers mark which is which. See [`AUTHORS`](AUTHORS).
+1. Start the car (engine on or accessory mode) and wait for the head unit to
+   finish starting up.
+2. Plug in the drive. After a few seconds, the HUDLink menu appears.
+3. At **STEP 1 of 2: HUDLink**, press **Open**, then **Install**. The installer
+   tests the bridge on your head unit before it changes anything.
+4. When it says **HUDLink is installed**, press **OK**, then press **Skip** at
+   STEP 2.
+5. Press **Reboot now**, and pull out the drive while the screen is black.
 
-## Disclaimer
-Unofficial, community-developed modification — **not affiliated with, endorsed by, or
-supported by Mazda Motor Corporation or Apple Inc.** "Mazda", "Mazda Connect", "CarPlay"
-and related marks belong to their respective owners. For research and personal use on your
-own vehicle, at your own risk. No warranty.
+### 4. Drive
+
+Start a route in Apple Maps or Google Maps. The arrow, the distance and the road
+name appear on the HUD as soon as guidance starts, and the HUD clears when it
+ends.
+
+To uninstall, run the drive again and choose **Uninstall**. The
+[install guide](docs/install.md) covers updates, every message the installer
+can show, and what to try if the HUD stays blank.
+
+Here's everything Install changes. Uninstall puts all of it back:
+
+| File | Change |
+|---|---|
+| `/data_persist/cp-hud-mod/libpatch-blmjcicarplay.so` | the bridge (a new file) |
+| `/jci/sm/sm.conf`, `/jci/sm/sm_WCP.conf` | only the `jciCARPLAY` service entry: it loads the bridge, keeps CarPlay's factory library path, and restarts just CarPlay, not the whole head unit, if CarPlay fails (`reset_board="no"`) |
+| `/etc/devmgr_config_master.xml` | `NaviSupported` goes from `FALSE` to `TRUE` |
 
 ## How it works
-Short version: the shim is `LD_PRELOAD`ed into `jciCARPLAY`; it passively taps the libc
-`msgrcv` the OEM uses to receive iAP2 events, decodes the maneuver (`0x8059`) / guidance
-(`0x8058`) bursts, and pushes the result to `com.jci.vbs.navi`. Full data path and the
-`maneuverType` catalogue: [`docs/how-it-works.md`](docs/how-it-works.md).
+
+```
+iPhone (CarPlay, navigating)
+  |  route guidance (iAP2), over a cable or a wireless adapter
+  v
+device manager -> message queue
+  |
+  v
+jciCARPLAY, the head unit's CarPlay process, with HUDLink loaded into it:
+  |  asks the iPhone for route guidance once a CarPlay session starts,
+  |  reads each guidance message as it arrives (without changing it),
+  |  decodes the maneuver, the distance and the road name
+  v
+com.jci.vbs.navi, the head unit's HUD service (the same calls the built-in navigation makes)
+  |
+  v
+Active Driving Display: arrow, distance, road name
+```
+
+Besides loading the bridge, the installer turns on `NaviSupported` in the
+device manager's settings. That setting is what tells the iPhone the car can
+accept route guidance. For the full picture, including the message formats,
+see [docs/how-it-works.md](docs/how-it-works.md).
+
+## Building from source
+
+`tools/make-usb.sh` builds the bridge for you, so you only need this section if
+you're working on the code.
+
+```bash
+tools/build.sh UNITS=imperial
+```
+
+The bridge lands in `mazda/build/release/libpatch-blmjcicarplay.so`. Builds are
+reproducible: in the pinned build container, the same source and options always
+produce the same bytes.
+
+| Option | What it does |
+|---|---|
+| `UNITS=metric` | meters and kilometers (the default) |
+| `UNITS=imperial` | feet and miles |
+| `VIETNAMESE=1` | replaces Vietnamese letters the HUD's font can't display |
+| `diag` | builds the diagnostic version, which keeps a detailed log on the head unit |
+| `debug` | builds an unoptimized version that logs everything |
+
+You can combine them, for example `tools/build.sh diag UNITS=imperial`. To put
+the diagnostic version on a USB drive, run
+`tools/make-usb.sh --units imperial --diag`.
+
+If you'd rather not use Docker, you can run `make` directly on Linux x86-64
+with a checkout of [lmagder/m3-toolchain](https://github.com/lmagder/m3-toolchain)
+at commit `61ec0343`:
+
+```bash
+make -C mazda M3TOOLCHAIN=/path/to/m3-toolchain UNITS=imperial
+```
+
+### Tests
+
+```bash
+tools/test.sh
+```
+
+This runs the USB scripts against a fake head unit using BusyBox, the same
+shell and tools the real head unit has. The tests cover every refusal, install,
+update, uninstall back to the original bytes, writes that fail halfway, the off
+switch, Save logs and the launcher.
+
+To test against your own car's files as well, add `--factory DIR` with copies
+of your head unit's `sm.conf` and `sm_WCP.conf` (details in
+[tests/run.sh](tests/run.sh)). Mazda's files are not included in this
+repository.
+
+## Repository layout
+
+```
+mazda/
+  Makefile                   cross-compiles the bridge
+  patches/blmjcicarplay/
+    main.cpp                 entry point, only active in jciCARPLAY; the off switch
+    devmgr_shim.cpp          device manager hooks: requests route guidance, reads it
+    nav.cpp                  decodes route guidance, picks the maneuver to show
+    hud/hud_send.cpp, .h     builds and sends HUD frames (adapted from headunit)
+    oem/                     declarations for the head unit's own D-Bus and HUD calls
+    log.h, patch.h           logging and shared declarations
+usb/
+  launcher.sh                the menu the USB drive opens
+  hudlink.sh                 the installer
+  hudlink-logs.sh            the Save logs step
+tools/
+  Dockerfile, build.sh       the pinned build container and the build script
+  make-usb.sh                assembles the USB files in dist/usb/
+  test.sh                    runs the tests in a container
+tests/                       the fake head unit tests and their fixtures
+docs/
+  install.md                 the install guide
+  how-it-works.md            the data path, the message formats and the installer
+```
+
+## Known issues
+
+- **Waze doesn't work.** It never sends route guidance to the car, so the HUD
+  stays blank. Worse, if Waze is left open in the background, it can freeze the
+  HUD on the last turn after Apple Maps or Google Maps has finished guiding.
+  Closing Waze clears it
+  ([mazda-carplay-hud#10](https://github.com/KidMixer/mazda-carplay-hud/issues/10)).
+- **Some wireless adapters block route guidance.** A Carlinkit CPC200-U2W
+  leaves the HUD blank, while adapters with smartBox firmware, like the one in
+  our car, work fine
+  ([mazda-carplay-hud#2](https://github.com/KidMixer/mazda-carplay-hud/issues/2)).
+- **CarPlay guidance and built-in navigation guidance at the same time** hasn't
+  been tested.
+- **Only firmware 74.00.324 is supported.** The installer refuses anything else.
+
+### The off switch
+
+If CarPlay ever crashes while the bridge is running, the bridge saves the crash
+details on the head unit and stays off until you run Install again, so a fault
+can't repeat on every drive. CarPlay keeps working; you only lose the
+directions on the HUD. Running Install again turns the bridge back on and
+copies the crash details to the USB drive so you can report them.
+
+This happened once during testing, with an earlier build: CarPlay aborted,
+possibly while it was shutting down. The off switch did its job and CarPlay
+kept running. We never found the cause, and the build tested after that ran
+without problems.
+
+## What changed from the original
+
+Compared with [mazda-carplay-hud](https://github.com/KidMixer/mazda-carplay-hud)
+at commit `9782e92`:
+
+- **A new installer.** It only edits the `jciCARPLAY` entry on the head unit and
+  refuses any entry it doesn't recognize. That means it ships no Mazda files
+  and doesn't disturb changes made by other mods. Before anything points to the
+  bridge, it tests it on the head unit: its libraries and symbol versions,
+  CarPlay's library list with and without it, and a load test. Every file is
+  written through a checked temporary copy, and if a write fails, the factory
+  files go back. Updates replace the installed bridge in place, and Uninstall
+  removes exactly what Install added, nothing more.
+- **CarPlay keeps its factory library path.** The original installer gives the
+  CarPlay service a shorter `LD_LIBRARY_PATH`. HUDLink leaves the factory path
+  alone, so CarPlay loads exactly the same libraries it would without the
+  bridge, and the installer confirms this before changing anything.
+- **Feet and miles** (`UNITS=imperial`).
+- **An off switch** that disables the bridge after a crash (see
+  [The off switch](#the-off-switch)).
+- **A diagnostic build** (`make diag`) and a **Save logs** step that copies
+  everything a bug report needs onto the USB drive.
+- **Leaner logging.** All log lines go to one size-capped file, and the
+  guidance request retries are only logged when the result changes.
+- **Reproducible builds** in a pinned toolchain container, with a fixed link
+  order and automatic rebuilds when the build options change.
+- **Tests** for the USB scripts, run on a fake head unit.
+- **Cleaner code.** The compiled-out speed limit code, an unused copy of
+  headunit's D-Bus proxies and the leftover reverse-engineering switches are
+  gone. The HUD sender now builds each frame in a single path, and the comments
+  describe the code as it actually is.
+
+## Credits
+
+HUDLink uses work from these projects:
+
+- **KID MIXER-MODER**,
+  [mazda-carplay-hud](https://github.com/KidMixer/mazda-carplay-hud) (AGPL-3.0).
+  The CarPlay-to-HUD bridge HUDLink is forked from, including the decoding of
+  Apple's route guidance messages, the hooks inside `jciCARPLAY` and the HUD
+  transport through the head unit's own libraries.
+- **Trevelopment and the headunit contributors**,
+  [headunit](https://github.com/Trevelopment/headunit) (AGPL-3.0). The HUD
+  sender (`hud/hud_send.*`) is adapted from headunit's HUD code, by way of
+  mazda-carplay-hud.
+- **lmagder**, [m3-toolchain](https://github.com/lmagder/m3-toolchain). The ARM
+  cross-compiler we build the bridge with. The build container downloads it;
+  it isn't part of this repository.
+- **piotrmocko**, [mzd-v74-tweaks](https://github.com/piotrmocko/mzd-v74-tweaks)
+  (CC BY-NC-SA 4.0). Its release sets up the USB drive that starts HUDLink.
+  None of its files are included here, and HUDLink's USB scripts were written
+  from scratch.
+
+We also relied on findings from the original project's issues: ibm0078 and
+AmbrosiaAS worked out which wireless adapters pass route guidance through
+([#2](https://github.com/KidMixer/mazda-carplay-hud/issues/2)), SlendyMilky
+found out why Waze leaves the HUD blank
+([#10](https://github.com/KidMixer/mazda-carplay-hud/issues/10)), and ScorpAL's
+review of the original installer
+([#6](https://github.com/KidMixer/mazda-carplay-hud/issues/6)) pointed out the
+risks of restoring whole files, which HUDLink's installer avoids.
+
+The test car also runs other tweaks from mzd-v74-tweaks, plus its own theme
+changes. Those aren't part of HUDLink.
+
+## License
+
+HUDLink is licensed under the GNU Affero General Public License v3.0 or later
+([LICENSE](LICENSE)). That wasn't our choice to make: the bridge comes from
+mazda-carplay-hud and the HUD sender from headunit, both AGPL-3.0, and anything
+built on them has to stay AGPL-3.0. So HUDLink can't be released under a
+permissive license like MIT.
+
+In practice, anyone can use, modify and share HUDLink. If you share it,
+modified or not, you have to share the source code under the same license. Full
+attribution is in [NOTICE.md](NOTICE.md) and [AUTHORS](AUTHORS).
+
+## Disclaimer
+
+HUDLink is an unofficial modification. It isn't affiliated with, endorsed by or
+supported by Mazda Motor Corporation, Apple Inc. or Google LLC. Mazda, Mazda
+Connect, CarPlay, Apple Maps and Google Maps are trademarks of their respective
+owners.
+
+You modify your head unit's software at your own risk, and doing so may affect
+your warranty. The installer checks your head unit and refuses anything it
+doesn't recognize, but HUDLink comes with no warranty of any kind (see the
+license). And please keep your eyes on the road.
