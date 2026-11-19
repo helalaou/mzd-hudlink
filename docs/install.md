@@ -22,18 +22,22 @@ accessory mode.
   `12345678` with Carlinkit, but the smartBox hub in the test car uses the same
   password.
 - **Get a USB drive** formatted as FAT32, 32 GB or smaller.
+- **Set up a computer** with git and Docker: Docker Engine on Linux, or
+  [Colima](https://github.com/abiosoft/colima) or Docker Desktop on macOS.
 
 ## 1. Build the USB files
 
-On a computer with Docker (see [How to run it](../README.md#how-to-run-it) in
-the README), run this at the root of the repository:
+Start Docker (with Colima, run `colima start`), then run this at the root of
+the repository:
 
 ```bash
 tools/make-usb.sh --units imperial
 ```
 
-For meters and kilometers, use `--units metric` instead. The script builds the
-bridge, checks the USB scripts and puts these files in `dist/usb/`:
+For meters and kilometers, use `--units metric` instead. The first run sets up
+the build container and downloads the ARM cross-compiler, so it takes a while;
+later runs are much faster. The script builds the bridge, checks the USB
+scripts and puts these files in `dist/usb/`:
 
 ```
 launcher.sh, launcher.sh.md5          the menu
@@ -118,9 +122,19 @@ Free up some space and run Save logs again before you install.
 7. At **Done. The head unit needs a reboot**, press **Reboot now**. Pull out the
    drive while the screen is black.
 
-After the reboot, start a route in Apple Maps or Google Maps. The arrow and the
-distance appear on the HUD as soon as guidance starts, and the HUD clears when
-guidance ends.
+After the reboot, start a route in Apple Maps or Google Maps. The arrow, the
+distance and the road name appear on the HUD as soon as guidance starts, and
+the HUD clears when guidance ends.
+
+## What Install changes
+
+| File | Change |
+|---|---|
+| `/data_persist/cp-hud-mod/libpatch-blmjcicarplay.so` | the bridge (a new file) |
+| `/jci/sm/sm.conf`, `/jci/sm/sm_WCP.conf` | only the `jciCARPLAY` service entry: it loads the bridge, keeps CarPlay's factory library path, and restarts just CarPlay, not the whole head unit, if CarPlay fails (`reset_board="no"`) |
+| `/etc/devmgr_config_master.xml` | `NaviSupported` goes from `FALSE` to `TRUE`, which tells the iPhone the car accepts route guidance |
+
+Uninstall restores all of it.
 
 ## Uninstall
 
@@ -193,3 +207,8 @@ directions on the HUD.
 Running **Install** again copies the crash details to `logs/hudlink-crash.txt`
 on the drive and turns the bridge back on from the next reboot. Attach that
 file when you report the crash in an issue.
+
+This happened once during testing, with an earlier build: CarPlay aborted,
+possibly while shutting down. The off switch disabled the bridge and CarPlay
+kept running. The cause wasn't found, and the build tested after it ran without
+problems.

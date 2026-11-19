@@ -17,6 +17,10 @@ inside that same process.
 
 ## The data path
 
+![HUDLink data path: iPhone, iAP2 transport, device manager, jciCARPLAY with HUDLink, com.jci.vbs.navi, Active Driving Display](images/hudlink-architecture.png)
+
+In more detail, with the source file that handles each step:
+
 ```
 iPhone, navigating in Apple Maps or Google Maps
   |  iAP2 route guidance updates, over a cable or a wireless adapter
