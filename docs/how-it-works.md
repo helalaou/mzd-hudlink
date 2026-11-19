@@ -1,9 +1,9 @@
 # How HUDLink works
 
-This page traces a CarPlay instruction from the iPhone all the way to the
-head-up display, then explains how the installer keeps the head unit safe. The
-source files mentioned here contain the same details in their comments, right
-next to the code.
+This page follows a CarPlay instruction from the iPhone to the head-up display,
+then describes the checks the installer makes before it changes anything on the
+head unit. The source files mentioned here contain the same details in their
+comments, next to the code.
 
 ## Why CarPlay directions never reach the HUD
 
@@ -45,13 +45,13 @@ Two settings make this work, and the installer writes both:
 - `NaviSupported` set to `TRUE` in `/etc/devmgr_config_master.xml` makes the
   device manager tell the iPhone that the car accepts route guidance.
 
-## Staying out of the way: main.cpp
+## Process check: main.cpp
 
 Because of `LD_PRELOAD`, the bridge's constructor runs in every process that
 inherits the variable. It checks `/proc/self/cmdline` and only becomes active
 in the CarPlay process, which the system manager starts as
 `sm_svclauncher -l jciCARPLAY /jci/carplay/blmjcicarplay.so 0 -a`. In every
-other process, the hooks simply pass each call through untouched.
+other process, the hooks pass each call through unchanged.
 
 The constructor also installs the fatal-signal handlers behind the off switch
 (see below).
@@ -160,19 +160,19 @@ miles to one decimal place beyond that.
 The sender is adapted from [headunit](https://github.com/Trevelopment/headunit)'s
 HUD code. Rather than using a D-Bus binding of its own, it goes through the head
 unit's own libraries, `libjcidbus` and `libjcivbsnaviclient` (declared in
-`oem/`), and makes the same calls the built-in navigation makes. This has two
-useful side effects: `libjcidbus` keeps the process alive if the service bus
+`oem/`), and makes the same calls the built-in navigation makes. Two things
+follow from this: `libjcidbus` keeps the process alive if the service bus
 disappears (for example when switching between CarPlay and Android Auto), and
 it runs its own I/O thread.
 
 The decoder runs on the device manager's receive thread, which must never
-block. So it just writes a snapshot under a sequence lock and wakes the sender
+block, so it only writes a snapshot under a sequence lock and wakes the sender
 thread. The sender compares the snapshot with what it last sent and makes the
 calls: `SetHUDDisplayMsgReq` for the icon and the distance,
 `SetHUD_Display_Msg2` for the road name.
 
-A ticker wakes the sender twice a second to resend the current frame, just as
-the built-in navigation does, so the HUD doesn't time it out. The sender also
+A ticker wakes the sender twice a second to resend the current frame, as the
+built-in navigation does, so the HUD doesn't time it out. The sender also
 clears the HUD at startup, because the HUD keeps its last frame across a
 restart, and whenever directions end.
 
@@ -201,6 +201,12 @@ sent as they are.
   as that file exists, the bridge stays inactive on every start, so a fault
   can't repeat on every drive. Running Install again copies the file to the USB
   drive and deletes it, which turns the bridge back on.
+- **Save logs** (`usb/hudlink-logs.sh`): copies the logs above, the CarPlay
+  service entry and process environment, and the device manager settings to
+  `logs/check-<date>-<time>/` on the drive. It also saves a backup of
+  `sm.conf`, `sm_WCP.conf` and `devmgr_config_master.xml` in `backup/`, checks
+  each copy against the original's md5 and records the sums in `md5.txt`. It
+  only reads from the head unit.
 
 ## The installer: usb/hudlink.sh
 
@@ -254,4 +260,4 @@ on before HUDLink was installed (the installer records this in
 to offer a reboot: 0 means nothing changed, 1 means it failed and nothing
 changed, and 2 means something changed.
 
-`tests/run.sh` exercises every one of these paths on a fake head unit.
+`tests/run.sh` tests each of these cases on a fake head unit.

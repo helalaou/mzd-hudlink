@@ -40,7 +40,8 @@ added since: the USB scripts (`usb/`), the build and test tools (`tools/`,
   (`mazda/patches/blmjcicarplay/hud/hud_send.cpp` and `hud_send.h`) is adapted
   from headunit's HUD code, and the cross-compile setup follows headunit's
   approach. Apart from the original bridge, this is the only outside code in
-  HUDLink, and it's the reason the bridge, and so HUDLink, is AGPL-3.0.
+  HUDLink. Its AGPL-3.0 license is why the bridge, and therefore HUDLink, is
+  AGPL-3.0.
 
 ## Not included
 
