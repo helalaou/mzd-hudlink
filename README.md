@@ -36,10 +36,12 @@ it left the factory. In late 2018, Mazda started offering an official upgrade
 for 2014-and-newer cars with Mazda Connect: dealers install the latest Mazda
 Connect firmware and new USB ports, for $199 plus labor
 ([Car and Driver](https://www.caranddriver.com/news/a25250932/mazda-apple-carplay-android-auto-upgrade/)).
-Other cars got CarPlay from a third-party installer, or from the owner with an
-aftermarket adapter. The result is a mix of setups: the official upgrade runs
-CarPlay over a USB cable, while wireless CarPlay on these older cars comes from
-aftermarket adapters and hubs.
+In practice, the install typically comes to around $600 out the door, and that
+buys CarPlay on the screen only, with nothing on the HUD. Other cars got
+CarPlay from a third-party installer, or from the owner with an aftermarket
+adapter. The result is a mix of setups: the official upgrade runs CarPlay over
+a USB cable, while wireless CarPlay on these older cars comes from aftermarket
+adapters and hubs.
 
 ### The head-up display was left out
 
@@ -60,7 +62,7 @@ only ever shows directions from the built-in SD-card navigation. It makes no
 difference whether CarPlay came from the factory or was added later, or how
 genuine the parts are: CarPlay runs on the center screen, its directions never
 reach the HUD, and no firmware update for these cars changes that. Even the
-official, paid route doesn't help: Mazda's dealer upgrade gets you CarPlay on
+official, paid route doesn't help: around $600 at a dealer gets you CarPlay on
 the screen, but not on the HUD the way the newest Mazdas have it, and there's
 no official update or part a dealer could add to change that. Owners end up
 with a HUD that has nothing to do with the navigation they actually use.
