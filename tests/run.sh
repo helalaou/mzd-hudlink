@@ -482,20 +482,47 @@ echo "diag line" > "${D}/diag.log"
 snap > "${T}/before"
 run hudlink-logs.sh 0
 expect_status 0
-expect_shown "Logs saved to the USB drive"
+expect_shown "Logs and backup saved to the USB drive"
 expect_same "${T}/before" "head unit unchanged"
 out=$(find "${U}/logs" -maxdepth 1 -name 'check-*' | sort | tail -n 1)
 for f in hudlink-logs.log carplay_bridge.log bridge-diag.log processes.txt dmesg.txt; do
   [ -s "${out}/${f}" ] && ok "saved ${f}" || bad "did not save ${f}"
 done
 grep -q "^LD_LIBRARY_PATH=" "${out}/hudlink-logs.log" 2> /dev/null && ok "the log shows CarPlay's environment" || bad "the log lacks CarPlay's environment"
+for f in sm.conf sm_WCP.conf; do
+  cmp -s "${out}/backup/${f}" "${R}/jci/sm/${f}" && ok "the backup of ${f} matches the head unit" || bad "the backup of ${f} differs"
+done
 
 case_ "Save logs: Cancel"
 snap > "${T}/before"
+rm -rf "${U}/logs"
 run hudlink-logs.sh 1
 expect_status 0
-expect_not_shown "Logs saved"
+expect_not_shown "saved to the USB drive"
 expect_same "${T}/before" "head unit unchanged"
+[ -z "$(find "${U}/logs" -name backup 2> /dev/null)" ] && ok "no backup was written" || bad "a backup was written"
+
+case_ "Save logs before installing: backup of the factory files"
+new_unit
+snap > "${T}/before"
+run hudlink-logs.sh 0
+expect_status 0
+expect_shown "Logs and backup saved to the USB drive"
+expect_same "${T}/before" "head unit unchanged"
+out=$(find "${U}/logs" -maxdepth 1 -name 'check-*' | sort | tail -n 1)
+cmp -s "${out}/backup/sm.conf" "${fixtures}/sm.conf" && ok "backup/sm.conf is the factory file" || bad "backup/sm.conf differs from the factory file"
+cmp -s "${out}/backup/sm_WCP.conf" "${fixtures}/sm_WCP.conf" && ok "backup/sm_WCP.conf is the factory file" || bad "backup/sm_WCP.conf differs from the factory file"
+cmp -s "${out}/backup/devmgr_config_master.xml" "${fixtures}/devmgr_config_master.xml" && ok "backup/devmgr_config_master.xml is the factory file" || bad "backup/devmgr_config_master.xml differs from the factory file"
+(cd "${out}/backup" 2> /dev/null && md5sum -c md5.txt > /dev/null 2>&1) && ok "backup/md5.txt checks out" || bad "backup/md5.txt does not check out"
+[ "$(wc -l < "${out}/backup/md5.txt" 2> /dev/null)" = 3 ] && ok "md5.txt lists the three files" || bad "md5.txt does not list the three files"
+
+case_ "Save logs: backup incomplete"
+new_unit
+rm -f "${R}/jci/sm/sm_WCP.conf"
+run hudlink-logs.sh 0
+expect_status 0
+expect_shown "the backup is incomplete"
+expect_not_shown "Logs and backup saved"
 
 case_ "Launcher: install, then reboot"
 new_unit

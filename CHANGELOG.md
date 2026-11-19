@@ -16,7 +16,7 @@ Maps.
   exactly what it added.
 - **USB launcher** (`usb/launcher.sh`) and a **Save logs** step
   (`usb/hudlink-logs.sh`) that copies everything a bug report needs to the
-  drive.
+  drive, along with a checked backup of the three files Install changes.
 - **Feet and miles** on the HUD (`UNITS=imperial`).
 - **Off switch:** if the CarPlay process crashes, the bridge stays off until
   Install is run again.
@@ -37,7 +37,7 @@ Maps.
 - The toolchain path is set on the `make` command line instead of through a git
   submodule.
 - Every bridge source file was cleaned up, and the comments were rewritten to
-  describe the code as it actually is.
+  match the code.
 
 ### Removed
 

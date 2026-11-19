@@ -7,8 +7,10 @@
 # Copies to the USB drive (logs/check-<date>-<time>/) what is needed to see
 # why CarPlay directions do not reach the HUD: the bridge's logs, the CarPlay
 # service entry and process, and the device manager settings the head unit
-# really uses. It changes NOTHING on the head unit: it only reads there and
-# writes on the USB drive.
+# really uses. It also saves a backup of the three files Install changes
+# (sm.conf, sm_WCP.conf and devmgr_config_master.xml), exactly as they are,
+# with their md5 sums. It changes NOTHING on the head unit: it only reads
+# there and writes on the USB drive.
 #
 # Run by launcher.sh. Exit status: 0 (nothing on the head unit changes).
 # POSIX sh for the head unit's BusyBox. ASCII only, LF line endings.
@@ -79,7 +81,7 @@ then
   exit 0
 fi
 
-if ! choose "Copy the HUDLink logs to the USB drive?\nThis changes nothing on the head unit." "Save" "Cancel"
+if ! choose "Copy the HUDLink logs and a backup of the files\nInstall changes to the USB drive?\nThis changes nothing on the head unit." "Save" "Cancel"
 then
   echo "cancelled"
   sync
@@ -89,6 +91,25 @@ note "Saving logs...\nDo not remove the USB drive."
 
 # Strip NUL-separated /proc files into lines.
 lines_of() { tr '\000' '\n' < "$1" 2>/dev/null; }
+
+# --- 0. Backup of the files Install changes, exactly as they are now
+echo "--- backup"
+BACKUP="${OUT}/backup"
+mkdir -p "$BACKUP"
+BACKUP_OK=1
+for _f in "${SM_DIR}/sm.conf" "${SM_DIR}/sm_WCP.conf" "$XML"
+do
+  _name=${_f##*/}
+  if [ -f "$_f" ] && cp "$_f" "${BACKUP}/${_name}" &&
+     [ "$(file_md5 "${BACKUP}/${_name}")" = "$(file_md5 "$_f")" ]
+  then
+    echo "$(file_md5 "$_f")  ${_name}" >> "${BACKUP}/md5.txt"
+  else
+    echo "backup: could not copy ${_f}"
+    BACKUP_OK=0
+  fi
+done
+echo "backup: $([ "$BACKUP_OK" = 1 ] && echo complete || echo INCOMPLETE)"
 
 # --- 1. The head unit and the bridge
 echo "--- head unit"
@@ -150,5 +171,10 @@ dmesg 2>/dev/null | tail -n 300 > "${OUT}/dmesg.txt"
 
 echo "${TITLE} finished"
 sync
-message "Logs saved to the USB drive.\nNothing was changed on the head unit."
+if [ "$BACKUP_OK" = 1 ]
+then
+  message "Logs and backup saved to the USB drive.\nNothing was changed on the head unit."
+else
+  message "Logs saved, but the backup is incomplete.\nCheck the free space on the USB drive.\nNothing was changed on the head unit."
+fi
 exit 0

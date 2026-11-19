@@ -81,5 +81,5 @@ then
 fi
 
 step "hudlink.sh" "STEP 1 of 2: HUDLink\nCarPlay directions on the HUD.\nOpen, then choose Install or Uninstall.\nIf its self-test fails, nothing is changed." || finish
-step "hudlink-logs.sh" "STEP 2 of 2: Save logs\nCopies the HUDLink logs to the USB drive.\nChanges nothing on the head unit." || finish
+step "hudlink-logs.sh" "STEP 2 of 2: Save logs\nCopies the HUDLink logs and a backup of the\nfiles Install changes to the USB drive.\nChanges nothing on the head unit." || finish
 finish
