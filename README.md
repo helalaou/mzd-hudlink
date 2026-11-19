@@ -8,15 +8,71 @@ and traffic sign display keeps working.
 
 ## Why it exists
 
-On cars with the first-generation Mazda Connect head unit (CMU150), the head-up
-display (Mazda calls it the Active Driving Display) only shows directions from
-the built-in SD-card navigation. CarPlay directions never make it there, and
-Mazda never added support for them on these cars.
+### CarPlay in Mazdas is a patchwork
 
-HUDLink fills that gap. Once it's installed, the HUD shows live turn-by-turn
-directions from Apple Maps or Google Maps, whether your iPhone is plugged in or
-connected wirelessly. CarPlay itself keeps running on the center screen as
-usual.
+Mazda brought Apple CarPlay to its lineup gradually. According to Mazda dealer
+information, these are the models and model years that came with CarPlay from
+the factory (years can differ by market):
+
+| Model | Factory CarPlay |
+|---|---|
+| Mazda2 | 2020–2024 |
+| Mazda3 | 2019–2024 |
+| Mazda6 | 2018–2022 |
+| CX-3 | 2020–2024 |
+| CX-30 | 2020–2024 |
+| CX-5 | 2019–2024 |
+| CX-50 | 2022–2024 |
+| CX-60 | 2022–2024 |
+| CX-70 | 2025 |
+| CX-8 | 2019–2024 |
+| CX-9 | 2019–2024 |
+| CX-90 | 2024 |
+| MX-30 | 2021–2024 |
+| MX-5 Miata | 2019–2024 |
+
+A Mazda outside this list that has CarPlay almost certainly had it added after
+it left the factory. In late 2018, Mazda started offering an official upgrade
+for 2014-and-newer cars with Mazda Connect: dealers install the latest Mazda
+Connect firmware and new USB ports, for $199 plus labor
+([Car and Driver](https://www.caranddriver.com/news/a25250932/mazda-apple-carplay-android-auto-upgrade/)).
+Other cars got CarPlay from a third-party installer, or from the owner with an
+aftermarket adapter. The result is a mix of setups: the official upgrade runs
+CarPlay over a USB cable, while wireless CarPlay on these older cars comes from
+aftermarket adapters and hubs.
+
+### The head-up display was left out
+
+None of these routes connect CarPlay to the head-up display (Mazda calls it the
+Active Driving Display). Mazda only started rolling out CarPlay directions on
+the HUD around the 2023–2024 model years, depending on the model and region.
+Earlier Mazda Connect cars, roughly the 2014 to 2022–2023 models, only show the
+built-in navigation's directions on the HUD. And even on the newer cars, owners
+report that HUD directions work most reliably with Apple Maps, while support
+for Google Maps and Waze has varied with the model year, the car's software and
+iOS and app updates (see the threads on the
+[CX-90 Forum](https://www.cx90forum.com/threads/google-maps-on-hud.2299/),
+[r/CX5](https://www.reddit.com/r/CX5/comments/1lbisac/turn_by_turn_navigation_in_hud/)
+and [Mazdas247](https://mazdas247.com/forum/threads/hud-directions-on-a-pre-2024-cx-5.123881937/)).
+
+So on cars with the first-generation Mazda Connect head unit (CMU150), the HUD
+only ever shows directions from the built-in SD-card navigation. It makes no
+difference whether CarPlay came from the factory or was added later, or how
+genuine the parts are: CarPlay runs on the center screen, its directions never
+reach the HUD, and no firmware update for these cars changes that. Even the
+official, paid route doesn't help: Mazda's dealer upgrade gets you CarPlay on
+the screen, but not on the HUD the way the newest Mazdas have it, and there's
+no official update or part a dealer could add to change that. Owners end up
+with a HUD that has nothing to do with the navigation they actually use.
+
+### HUDLink connects the two
+
+HUDLink fixes that. On a CMU150 head unit with firmware 74.00.324, it puts live
+turn-by-turn directions from Apple Maps and Google Maps on the HUD, wired or
+wireless, however CarPlay got into the car. The only requirement is that
+CarPlay runs through the head unit itself, as it does with factory CarPlay,
+Mazda's official upgrade, or a USB adapter with smartBox firmware. CarPlay itself
+keeps running on the center screen as usual.
 
 There's nothing to install on your phone, and no internet connection is needed.
 HUDLink simply reads the route guidance your iPhone already sends to the car.
