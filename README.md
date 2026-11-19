@@ -1,4 +1,4 @@
-# HUDLink
+# Mazda HUDLink
 
 **Your CarPlay directions, on your Mazda's head-up display.** HUDLink bridges
 Apple CarPlay, wired or wireless, to the factory head-up display of
